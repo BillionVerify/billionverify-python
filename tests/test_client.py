@@ -1,4 +1,4 @@
-"""Tests for EmailVerify Python SDK."""
+"""Tests for BillionVerify Python SDK."""
 
 import hashlib
 import hmac
@@ -7,10 +7,10 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from emailverify import (
-    AsyncEmailVerify,
+from billionverify import (
+    AsyncBillionVerify,
     AuthenticationError,
-    EmailVerify,
+    BillionVerify,
     InsufficientCreditsError,
     NotFoundError,
     RateLimitError,
@@ -19,25 +19,25 @@ from emailverify import (
 )
 
 
-class TestEmailVerifyClient:
-    """Tests for EmailVerify client."""
+class TestBillionVerifyClient:
+    """Tests for BillionVerify client."""
 
     def test_init_requires_api_key(self):
         """Should raise AuthenticationError when API key is missing."""
         with pytest.raises(AuthenticationError):
-            EmailVerify(api_key="")
+            BillionVerify(api_key="")
 
     def test_init_with_default_options(self):
         """Should create client with default options."""
-        client = EmailVerify(api_key="test-key")
+        client = BillionVerify(api_key="test-key")
         assert client.api_key == "test-key"
-        assert client.base_url == "https://api.emailverify.ai/v1"
+        assert client.base_url == "https://api.billionverify.com/v1"
         assert client.timeout == 30.0
         assert client.retries == 3
 
     def test_init_with_custom_options(self):
         """Should create client with custom options."""
-        client = EmailVerify(
+        client = BillionVerify(
             api_key="test-key",
             base_url="https://custom.api.com/v1",
             timeout=60.0,
@@ -49,7 +49,7 @@ class TestEmailVerifyClient:
 
     def test_context_manager(self):
         """Should work as context manager."""
-        with EmailVerify(api_key="test-key") as client:
+        with BillionVerify(api_key="test-key") as client:
             assert client is not None
 
     @patch.object(httpx.Client, "request")
@@ -78,7 +78,7 @@ class TestEmailVerifyClient:
         }
         mock_request.return_value = mock_response
 
-        with EmailVerify(api_key="test-key") as client:
+        with BillionVerify(api_key="test-key") as client:
             result = client.verify("test@example.com")
 
         assert result.email == "test@example.com"
@@ -113,7 +113,7 @@ class TestEmailVerifyClient:
         }
         mock_request.return_value = mock_response
 
-        with EmailVerify(api_key="test-key") as client:
+        with BillionVerify(api_key="test-key") as client:
             result = client.verify("test@example.com", smtp_check=False, timeout=5000)
 
         mock_request.assert_called_once()
@@ -133,7 +133,7 @@ class TestEmailVerifyClient:
         }
         mock_request.return_value = mock_response
 
-        with EmailVerify(api_key="test-key") as client:
+        with BillionVerify(api_key="test-key") as client:
             with pytest.raises(AuthenticationError):
                 client.verify("test@example.com")
 
@@ -149,7 +149,7 @@ class TestEmailVerifyClient:
         }
         mock_request.return_value = mock_response
 
-        with EmailVerify(api_key="test-key") as client:
+        with BillionVerify(api_key="test-key") as client:
             with pytest.raises(ValidationError):
                 client.verify("invalid")
 
@@ -165,7 +165,7 @@ class TestEmailVerifyClient:
         }
         mock_request.return_value = mock_response
 
-        with EmailVerify(api_key="test-key") as client:
+        with BillionVerify(api_key="test-key") as client:
             with pytest.raises(InsufficientCreditsError):
                 client.verify("test@example.com")
 
@@ -181,7 +181,7 @@ class TestEmailVerifyClient:
         }
         mock_request.return_value = mock_response
 
-        with EmailVerify(api_key="test-key") as client:
+        with BillionVerify(api_key="test-key") as client:
             with pytest.raises(NotFoundError):
                 client.verify("test@example.com")
 
@@ -204,7 +204,7 @@ class TestEmailVerifyClient:
         }
         mock_request.return_value = mock_response
 
-        with EmailVerify(api_key="test-key") as client:
+        with BillionVerify(api_key="test-key") as client:
             result = client.verify_bulk(
                 ["user1@example.com", "user2@example.com", "user3@example.com"]
             )
@@ -217,7 +217,7 @@ class TestEmailVerifyClient:
         """Should raise ValidationError when emails exceed 10000."""
         emails = ["test@example.com"] * 10001
 
-        with EmailVerify(api_key="test-key") as client:
+        with BillionVerify(api_key="test-key") as client:
             with pytest.raises(ValidationError):
                 client.verify_bulk(emails)
 
@@ -241,7 +241,7 @@ class TestEmailVerifyClient:
         }
         mock_request.return_value = mock_response
 
-        with EmailVerify(api_key="test-key") as client:
+        with BillionVerify(api_key="test-key") as client:
             result = client.get_bulk_job_status("job_123")
 
         assert result.job_id == "job_123"
@@ -269,7 +269,7 @@ class TestEmailVerifyClient:
         }
         mock_request.return_value = mock_response
 
-        with EmailVerify(api_key="test-key") as client:
+        with BillionVerify(api_key="test-key") as client:
             result = client.get_bulk_job_results("job_123", limit=50, offset=0)
 
         assert result.job_id == "job_123"
@@ -292,7 +292,7 @@ class TestEmailVerifyClient:
         }
         mock_request.return_value = mock_response
 
-        with EmailVerify(api_key="test-key") as client:
+        with BillionVerify(api_key="test-key") as client:
             result = client.get_credits()
 
         assert result.available == 9500
@@ -313,7 +313,7 @@ class TestEmailVerifyClient:
         }
         mock_request.return_value = mock_response
 
-        with EmailVerify(api_key="test-key") as client:
+        with BillionVerify(api_key="test-key") as client:
             result = client.create_webhook(
                 url="https://example.com/webhook",
                 events=["verification.completed"],
@@ -338,7 +338,7 @@ class TestEmailVerifyClient:
         ]
         mock_request.return_value = mock_response
 
-        with EmailVerify(api_key="test-key") as client:
+        with BillionVerify(api_key="test-key") as client:
             result = client.list_webhooks()
 
         assert len(result) == 1
@@ -352,7 +352,7 @@ class TestEmailVerifyClient:
         mock_response.is_success = True
         mock_request.return_value = mock_response
 
-        with EmailVerify(api_key="test-key") as client:
+        with BillionVerify(api_key="test-key") as client:
             client.delete_webhook("webhook_123")
 
         mock_request.assert_called_once()
@@ -365,7 +365,7 @@ class TestEmailVerifyClient:
             secret.encode(), payload.encode(), hashlib.sha256
         ).hexdigest()
 
-        result = EmailVerify.verify_webhook_signature(payload, expected_sig, secret)
+        result = BillionVerify.verify_webhook_signature(payload, expected_sig, secret)
 
         assert result is True
 
@@ -375,7 +375,7 @@ class TestEmailVerifyClient:
         secret = "test-secret"
         invalid_sig = "sha256=invalid"
 
-        result = EmailVerify.verify_webhook_signature(payload, invalid_sig, secret)
+        result = BillionVerify.verify_webhook_signature(payload, invalid_sig, secret)
 
         assert result is False
 
@@ -421,13 +421,13 @@ class TestExceptions:
 
 
 @pytest.mark.asyncio
-class TestAsyncEmailVerifyClient:
-    """Tests for async EmailVerify client."""
+class TestAsyncBillionVerifyClient:
+    """Tests for async BillionVerify client."""
 
     async def test_init_requires_api_key(self):
         """Should raise AuthenticationError when API key is missing."""
         with pytest.raises(AuthenticationError):
-            AsyncEmailVerify(api_key="")
+            AsyncBillionVerify(api_key="")
 
     @patch.object(httpx.AsyncClient, "request")
     async def test_verify_success(self, mock_request):
@@ -455,7 +455,7 @@ class TestAsyncEmailVerifyClient:
         }
         mock_request.return_value = mock_response
 
-        async with AsyncEmailVerify(api_key="test-key") as client:
+        async with AsyncBillionVerify(api_key="test-key") as client:
             result = await client.verify("test@example.com")
 
         assert result.email == "test@example.com"

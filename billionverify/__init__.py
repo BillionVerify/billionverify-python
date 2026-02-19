@@ -1,9 +1,9 @@
-"""EmailVerify Python SDK for email verification."""
+"""BillionVerify Python SDK for email verification."""
 
-from .client import AsyncEmailVerify, EmailVerify
+from .client import AsyncBillionVerify, BillionVerify
 from .exceptions import (
     AuthenticationError,
-    EmailVerifyError,
+    BillionVerifyError,
     InsufficientCreditsError,
     NotFoundError,
     RateLimitError,
@@ -30,8 +30,8 @@ __version__ = "1.0.0"
 
 __all__ = [
     # Clients
-    "EmailVerify",
-    "AsyncEmailVerify",
+    "BillionVerify",
+    "AsyncBillionVerify",
     # Types
     "VerificationResult",
     "VerificationStatus",
@@ -47,7 +47,7 @@ __all__ = [
     "Webhook",
     "WebhookEvent",
     # Exceptions
-    "EmailVerifyError",
+    "BillionVerifyError",
     "AuthenticationError",
     "RateLimitError",
     "ValidationError",

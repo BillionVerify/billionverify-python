@@ -3,20 +3,20 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "emailverify-ai"
+name = "billionverify"
 version = "1.0.3"
-description = "Official EmailVerify Python SDK for email verification"
+description = "Official BillionVerify Python SDK for email verification"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.8"
 authors = [
-    { name = "EmailVerify", email = "support@emailverify.ai" }
+    { name = "BillionVerify", email = "support@billionverify.com" }
 ]
 keywords = [
     "email",
     "verification",
     "validation",
-    "emailverify",
+    "billionverify",
     "email-verification"
 ]
 classifiers = [
@@ -45,12 +45,12 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://emailverify.ai"
-Documentation = "https://emailverify.ai/docs"
-Repository = "https://github.com/emailverify-ai/python-sdk"
+Homepage = "https://billionverify.com"
+Documentation = "https://billionverify.com/docs"
+Repository = "https://github.com/BillionVerify/python-sdk"
 
 [tool.hatch.build.targets.wheel]
-packages = ["emailverify"]
+packages = ["billionverify"]
 
 [tool.mypy]
 strict = true

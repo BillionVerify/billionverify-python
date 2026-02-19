@@ -1,4 +1,4 @@
-"""Webhooks example for EmailVerify SDK.
+"""Webhooks example for BillionVerify SDK.
 
 This example demonstrates:
 - Creating webhooks (events: file.completed, file.failed)
@@ -12,10 +12,10 @@ import hmac
 import json
 import os
 
-from emailverify import EmailVerify, NotFoundError, ValidationError
+from billionverify import BillionVerify, NotFoundError, ValidationError
 
 # Get API key from environment variable
-API_KEY = os.getenv("EMAILVERIFY_API_KEY", "your-api-key")
+API_KEY = os.getenv("BILLIONVERIFY_API_KEY", "your-api-key")
 
 
 def create_webhook_example():
@@ -24,12 +24,12 @@ def create_webhook_example():
     print("Creating Webhook")
     print("=" * 50)
 
-    with EmailVerify(api_key=API_KEY) as client:
+    with BillionVerify(api_key=API_KEY) as client:
         try:
             # Create a webhook for file verification events
             # Available events: file.completed, file.failed
             webhook = client.create_webhook(
-                url="https://your-app.com/webhooks/emailverify",
+                url="https://your-app.com/webhooks/billionverify",
                 events=["file.completed", "file.failed"],
             )
 
@@ -61,7 +61,7 @@ def list_webhooks_example():
     print("Listing Webhooks")
     print("=" * 50)
 
-    with EmailVerify(api_key=API_KEY) as client:
+    with BillionVerify(api_key=API_KEY) as client:
         try:
             webhooks = client.list_webhooks()
 
@@ -94,7 +94,7 @@ def delete_webhook_example(webhook_id: str):
     print("Deleting Webhook")
     print("=" * 50)
 
-    with EmailVerify(api_key=API_KEY) as client:
+    with BillionVerify(api_key=API_KEY) as client:
         try:
             client.delete_webhook(webhook_id)
             print(f"Webhook {webhook_id} deleted successfully!")
@@ -114,7 +114,7 @@ def verify_webhook_signature_example():
     print("Verifying Webhook Signature")
     print("=" * 50)
 
-    # Example webhook payload (as would be received from EmailVerify)
+    # Example webhook payload (as would be received from BillionVerify)
     webhook_payload = {
         "event": "file.completed",
         "data": {
@@ -142,7 +142,7 @@ def verify_webhook_signature_example():
     print(f"Expected signature: {expected_signature}")
 
     # Verify using the SDK's static method
-    is_valid = EmailVerify.verify_webhook_signature(
+    is_valid = BillionVerify.verify_webhook_signature(
         payload=raw_body,
         signature=expected_signature,
         secret=webhook_secret,
@@ -152,7 +152,7 @@ def verify_webhook_signature_example():
 
     # Test with an invalid signature
     print("\nTesting with invalid signature...")
-    is_invalid = EmailVerify.verify_webhook_signature(
+    is_invalid = BillionVerify.verify_webhook_signature(
         payload=raw_body,
         signature="sha256=invalid_signature",
         secret=webhook_secret,
@@ -165,13 +165,13 @@ def flask_webhook_handler_example():
     example_code = '''
 # Example Flask webhook handler
 from flask import Flask, request, jsonify
-from emailverify import EmailVerify
+from billionverify import BillionVerify
 
 app = Flask(__name__)
 
 WEBHOOK_SECRET = "your-webhook-secret"
 
-@app.route("/webhooks/emailverify", methods=["POST"])
+@app.route("/webhooks/billionverify", methods=["POST"])
 def handle_webhook():
     # Get the signature from the header
     signature = request.headers.get("X-EV-Signature")
@@ -182,7 +182,7 @@ def handle_webhook():
     raw_body = request.get_data(as_text=True)
 
     # Verify the signature
-    if not EmailVerify.verify_webhook_signature(
+    if not BillionVerify.verify_webhook_signature(
         payload=raw_body,
         signature=signature,
         secret=WEBHOOK_SECRET,
@@ -219,13 +219,13 @@ def fastapi_webhook_handler_example():
     example_code = '''
 # Example FastAPI webhook handler
 from fastapi import FastAPI, Request, HTTPException
-from emailverify import EmailVerify
+from billionverify import BillionVerify
 
 app = FastAPI()
 
 WEBHOOK_SECRET = "your-webhook-secret"
 
-@app.post("/webhooks/emailverify")
+@app.post("/webhooks/billionverify")
 async def handle_webhook(request: Request):
     # Get the signature from the header
     signature = request.headers.get("X-EV-Signature")
@@ -236,7 +236,7 @@ async def handle_webhook(request: Request):
     raw_body = await request.body()
 
     # Verify the signature
-    if not EmailVerify.verify_webhook_signature(
+    if not BillionVerify.verify_webhook_signature(
         payload=raw_body.decode("utf-8"),
         signature=signature,
         secret=WEBHOOK_SECRET,

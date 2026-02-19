@@ -1,4 +1,4 @@
-"""File upload example for EmailVerify SDK.
+"""File upload example for BillionVerify SDK.
 
 This example demonstrates:
 - File upload using upload_file() for async verification
@@ -10,15 +10,15 @@ This example demonstrates:
 import os
 import tempfile
 
-from emailverify import (
-    EmailVerify,
+from billionverify import (
+    BillionVerify,
     NotFoundError,
     TimeoutError,
     ValidationError,
 )
 
 # Get API key from environment variable
-API_KEY = os.getenv("EMAILVERIFY_API_KEY", "your-api-key")
+API_KEY = os.getenv("BILLIONVERIFY_API_KEY", "your-api-key")
 
 
 def create_sample_csv() -> str:
@@ -47,7 +47,7 @@ def upload_file_example():
     csv_path = create_sample_csv()
     print(f"Created sample CSV at: {csv_path}")
 
-    with EmailVerify(api_key=API_KEY) as client:
+    with BillionVerify(api_key=API_KEY) as client:
         try:
             # Upload the file using upload_file()
             job = client.upload_file(
@@ -84,7 +84,7 @@ def get_job_status_example(job_id: str):
     print("Getting Job Status")
     print("=" * 50)
 
-    with EmailVerify(api_key=API_KEY) as client:
+    with BillionVerify(api_key=API_KEY) as client:
         try:
             # Get job status without long-polling
             status = client.get_file_job_status(job_id)
@@ -119,7 +119,7 @@ def wait_for_completion_example(job_id: str):
     print("Waiting for Job Completion")
     print("=" * 50)
 
-    with EmailVerify(api_key=API_KEY) as client:
+    with BillionVerify(api_key=API_KEY) as client:
         try:
             # Wait for the job to complete
             print("Polling for completion...")
@@ -156,7 +156,7 @@ def get_results_example(job_id: str):
     print("Getting Job Results")
     print("=" * 50)
 
-    with EmailVerify(api_key=API_KEY) as client:
+    with BillionVerify(api_key=API_KEY) as client:
         try:
             # Get all results
             print("Fetching all results...")
@@ -247,7 +247,7 @@ def full_workflow_example():
     # Create a sample CSV file
     csv_path = create_sample_csv()
 
-    with EmailVerify(api_key=API_KEY) as client:
+    with BillionVerify(api_key=API_KEY) as client:
         try:
             # Step 1: Upload the file
             print("\nStep 1: Uploading file...")

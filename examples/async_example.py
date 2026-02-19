@@ -1,6 +1,6 @@
-"""Async example for EmailVerify SDK.
+"""Async example for BillionVerify SDK.
 
-This example demonstrates async/await usage with the AsyncEmailVerify client:
+This example demonstrates async/await usage with the AsyncBillionVerify client:
 - Async single email verification
 - Async bulk verification
 - Async file upload and monitoring
@@ -13,8 +13,8 @@ import os
 import tempfile
 from typing import List
 
-from emailverify import (
-    AsyncEmailVerify,
+from billionverify import (
+    AsyncBillionVerify,
     AuthenticationError,
     TimeoutError,
     ValidationError,
@@ -22,7 +22,7 @@ from emailverify import (
 )
 
 # Get API key from environment variable
-API_KEY = os.getenv("EMAILVERIFY_API_KEY", "your-api-key")
+API_KEY = os.getenv("BILLIONVERIFY_API_KEY", "your-api-key")
 
 
 async def single_verification_example():
@@ -31,7 +31,7 @@ async def single_verification_example():
     print("Async Single Email Verification")
     print("=" * 50)
 
-    async with AsyncEmailVerify(api_key=API_KEY) as client:
+    async with AsyncBillionVerify(api_key=API_KEY) as client:
         try:
             # Verify a single email
             result = await client.verify(
@@ -61,7 +61,7 @@ async def bulk_verification_example():
     print("Async Bulk Email Verification")
     print("=" * 50)
 
-    async with AsyncEmailVerify(api_key=API_KEY) as client:
+    async with AsyncBillionVerify(api_key=API_KEY) as client:
         try:
             emails = [
                 "user1@example.com",
@@ -102,7 +102,7 @@ async def concurrent_verification_example():
         "support@business.com",
     ]
 
-    async with AsyncEmailVerify(api_key=API_KEY) as client:
+    async with AsyncBillionVerify(api_key=API_KEY) as client:
         try:
             # Create verification tasks for all emails
             tasks = [
@@ -144,7 +144,7 @@ test@gmail.com
     with os.fdopen(fd, "w") as f:
         f.write(csv_content)
 
-    async with AsyncEmailVerify(api_key=API_KEY) as client:
+    async with AsyncBillionVerify(api_key=API_KEY) as client:
         try:
             # Upload the file
             print("Uploading file...")
@@ -192,7 +192,7 @@ async def credits_and_health_example():
     print("Async Credits and Health Check")
     print("=" * 50)
 
-    async with AsyncEmailVerify(api_key=API_KEY) as client:
+    async with AsyncBillionVerify(api_key=API_KEY) as client:
         # Run both requests concurrently
         health_task = client.health_check()
         credits_task = client.get_credits()
@@ -219,7 +219,7 @@ async def webhook_management_example():
     print("Async Webhook Management")
     print("=" * 50)
 
-    async with AsyncEmailVerify(api_key=API_KEY) as client:
+    async with AsyncBillionVerify(api_key=API_KEY) as client:
         try:
             # List existing webhooks
             webhooks = await client.list_webhooks()
@@ -256,7 +256,7 @@ async def batch_processing_example():
     batch_size = 50
     delay_between_batches = 1.0  # seconds
 
-    async with AsyncEmailVerify(api_key=API_KEY) as client:
+    async with AsyncBillionVerify(api_key=API_KEY) as client:
         all_results = []
 
         for i in range(0, len(all_emails), batch_size):

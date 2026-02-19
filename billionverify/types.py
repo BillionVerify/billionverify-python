@@ -1,4 +1,4 @@
-"""EmailVerify SDK Types."""
+"""BillionVerify SDK Types."""
 
 from dataclasses import dataclass
 from typing import List, Literal, Optional

@@ -1,21 +1,21 @@
-# emailverify
+# billionverify
 
-Official EmailVerify Python SDK for email verification.
+Official BillionVerify Python SDK for email verification.
 
-**Documentation:** https://emailverify.ai/docs
+**Documentation:** https://billionverify.com/docs
 
 ## Installation
 
 ```bash
-pip install emailverify-ai
+pip install billionverify
 ```
 
 ## Quick Start
 
 ```python
-from emailverify import EmailVerify
+from billionverify import BillionVerify
 
-client = EmailVerify(api_key="your-api-key")
+client = BillionVerify(api_key="your-api-key")
 
 # Verify a single email
 result = client.verify("user@example.com")
@@ -26,9 +26,9 @@ print(result.is_deliverable)  # True or False
 ## Configuration
 
 ```python
-client = EmailVerify(
+client = BillionVerify(
     api_key="your-api-key",        # Required
-    base_url="https://api.emailverify.ai/v1",  # Optional
+    base_url="https://api.billionverify.com/v1",  # Optional
     timeout=30.0,                   # Optional: Request timeout in seconds (default: 30)
     retries=3,                      # Optional: Number of retries (default: 3)
 )
@@ -134,10 +134,10 @@ for item in results.results:
 
 ```python
 import asyncio
-from emailverify import AsyncEmailVerify
+from billionverify import AsyncBillionVerify
 
 async def main():
-    async with AsyncEmailVerify(api_key="your-api-key") as client:
+    async with AsyncBillionVerify(api_key="your-api-key") as client:
         # Single verification
         result = await client.verify("user@example.com")
         print(result.status)
@@ -180,7 +180,7 @@ Webhooks support events: `file.completed`, `file.failed`
 ```python
 # Create a webhook
 webhook = client.create_webhook(
-    url="https://your-app.com/webhooks/emailverify",
+    url="https://your-app.com/webhooks/billionverify",
     events=["file.completed", "file.failed"],
 )
 print(f"Webhook ID: {webhook.id}")
@@ -195,9 +195,9 @@ for wh in webhooks:
 client.delete_webhook(webhook.id)
 
 # Verify webhook signature
-from emailverify import EmailVerify
+from billionverify import BillionVerify
 
-is_valid = EmailVerify.verify_webhook_signature(
+is_valid = BillionVerify.verify_webhook_signature(
     payload=raw_body,
     signature=signature_header,
     secret="your-webhook-secret",
@@ -207,8 +207,8 @@ is_valid = EmailVerify.verify_webhook_signature(
 ## Error Handling
 
 ```python
-from emailverify import (
-    EmailVerify,
+from billionverify import (
+    BillionVerify,
     AuthenticationError,
     RateLimitError,
     ValidationError,
@@ -236,7 +236,7 @@ except TimeoutError:
 ## Context Manager
 
 ```python
-with EmailVerify(api_key="your-api-key") as client:
+with BillionVerify(api_key="your-api-key") as client:
     result = client.verify("user@example.com")
     print(result.status)
 # Connection is automatically closed
@@ -247,7 +247,7 @@ with EmailVerify(api_key="your-api-key") as client:
 This SDK includes full type annotations for IDE support and type checking.
 
 ```python
-from emailverify import (
+from billionverify import (
     VerificationResult,
     BulkVerifyResponse,
     FileJobResponse,

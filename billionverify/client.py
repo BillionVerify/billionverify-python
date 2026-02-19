@@ -1,4 +1,4 @@
-"""EmailVerify SDK Client."""
+"""BillionVerify SDK Client."""
 
 import hashlib
 import hmac
@@ -10,7 +10,7 @@ import httpx
 
 from .exceptions import (
     AuthenticationError,
-    EmailVerifyError,
+    BillionVerifyError,
     InsufficientCreditsError,
     NotFoundError,
     RateLimitError,
@@ -31,13 +31,13 @@ from .types import (
     WebhookEvent,
 )
 
-DEFAULT_BASE_URL = "https://api.emailverify.ai/v1"
+DEFAULT_BASE_URL = "https://api.billionverify.com/v1"
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_RETRIES = 3
 
 
-class EmailVerify:
-    """EmailVerify API Client."""
+class BillionVerify:
+    """BillionVerify API Client."""
 
     def __init__(
         self,
@@ -46,11 +46,11 @@ class EmailVerify:
         timeout: float = DEFAULT_TIMEOUT,
         retries: int = DEFAULT_RETRIES,
     ) -> None:
-        """Initialize the EmailVerify client.
+        """Initialize the BillionVerify client.
 
         Args:
-            api_key: Your EmailVerify API key.
-            base_url: API base URL (default: https://api.emailverify.ai/v1).
+            api_key: Your BillionVerify API key.
+            base_url: API base URL (default: https://api.billionverify.com/v1).
             timeout: Request timeout in seconds (default: 30).
             retries: Number of retries for failed requests (default: 3).
         """
@@ -67,11 +67,11 @@ class EmailVerify:
             headers={
                 "EV-API-KEY": self.api_key,
                 "Content-Type": "application/json",
-                "User-Agent": "emailverify-python/1.0.0",
+                "User-Agent": "billionverify-python/1.0.0",
             },
         )
 
-    def __enter__(self) -> "EmailVerify":
+    def __enter__(self) -> "BillionVerify":
         return self
 
     def __exit__(self, *args: Any) -> None:
@@ -98,14 +98,14 @@ class EmailVerify:
             if skip_auth:
                 headers = {
                     "Content-Type": "application/json",
-                    "User-Agent": "emailverify-python/1.0.0",
+                    "User-Agent": "billionverify-python/1.0.0",
                 }
 
             request_timeout = custom_timeout if custom_timeout else self.timeout
 
             if files:
                 # For file uploads, remove Content-Type header to let httpx set it
-                upload_headers = {"EV-API-KEY": self.api_key, "User-Agent": "emailverify-python/1.0.0"}
+                upload_headers = {"EV-API-KEY": self.api_key, "User-Agent": "billionverify-python/1.0.0"}
                 response = self._client.request(
                     method=method,
                     url=path,
@@ -134,7 +134,7 @@ class EmailVerify:
         except httpx.TimeoutException as e:
             raise TimeoutError(f"Request timed out: {e}")
         except httpx.RequestError as e:
-            raise EmailVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0)
+            raise BillionVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0)
 
         if response.status_code == 204:
             return None
@@ -198,7 +198,7 @@ class EmailVerify:
                 time.sleep(2**attempt)
                 return self._request(method, path, json, params, attempt + 1, files, custom_timeout, skip_auth)
 
-        raise EmailVerifyError(message, code, status, details)
+        raise BillionVerifyError(message, code, status, details)
 
     def health_check(self) -> HealthCheckResponse:
         """Check API health status (no authentication required).
@@ -219,9 +219,9 @@ class EmailVerify:
                     status=data["status"],
                     version=data.get("version"),
                 )
-            raise EmailVerifyError("Health check failed", "HEALTH_CHECK_FAILED", response.status_code)
+            raise BillionVerifyError("Health check failed", "HEALTH_CHECK_FAILED", response.status_code)
         except httpx.RequestError as e:
-            raise EmailVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0)
+            raise BillionVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0)
 
     def verify(
         self,
@@ -595,8 +595,8 @@ class EmailVerify:
         return hmac.compare_digest(signature, expected)
 
 
-class AsyncEmailVerify:
-    """Async EmailVerify API Client."""
+class AsyncBillionVerify:
+    """Async BillionVerify API Client."""
 
     def __init__(
         self,
@@ -605,7 +605,7 @@ class AsyncEmailVerify:
         timeout: float = DEFAULT_TIMEOUT,
         retries: int = DEFAULT_RETRIES,
     ) -> None:
-        """Initialize the async EmailVerify client."""
+        """Initialize the async BillionVerify client."""
         if not api_key:
             raise AuthenticationError("API key is required")
 
@@ -619,11 +619,11 @@ class AsyncEmailVerify:
             headers={
                 "EV-API-KEY": self.api_key,
                 "Content-Type": "application/json",
-                "User-Agent": "emailverify-python/1.0.0",
+                "User-Agent": "billionverify-python/1.0.0",
             },
         )
 
-    async def __aenter__(self) -> "AsyncEmailVerify":
+    async def __aenter__(self) -> "AsyncBillionVerify":
         return self
 
     async def __aexit__(self, *args: Any) -> None:
@@ -652,13 +652,13 @@ class AsyncEmailVerify:
             if skip_auth:
                 headers = {
                     "Content-Type": "application/json",
-                    "User-Agent": "emailverify-python/1.0.0",
+                    "User-Agent": "billionverify-python/1.0.0",
                 }
 
             request_timeout = custom_timeout if custom_timeout else self.timeout
 
             if files:
-                upload_headers = {"EV-API-KEY": self.api_key, "User-Agent": "emailverify-python/1.0.0"}
+                upload_headers = {"EV-API-KEY": self.api_key, "User-Agent": "billionverify-python/1.0.0"}
                 response = await self._client.request(
                     method=method,
                     url=path,
@@ -688,7 +688,7 @@ class AsyncEmailVerify:
         except httpx.TimeoutException as e:
             raise TimeoutError(f"Request timed out: {e}")
         except httpx.RequestError as e:
-            raise EmailVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0)
+            raise BillionVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0)
 
         if response.status_code == 204:
             return None
@@ -750,7 +750,7 @@ class AsyncEmailVerify:
                 await asyncio.sleep(2**attempt)
                 return await self._request(method, path, json, params, attempt + 1, files, custom_timeout, skip_auth)
 
-        raise EmailVerifyError(message, code, status, details)
+        raise BillionVerifyError(message, code, status, details)
 
     async def health_check(self) -> HealthCheckResponse:
         """Check API health status (no authentication required).
@@ -771,9 +771,9 @@ class AsyncEmailVerify:
                         status=data["status"],
                         version=data.get("version"),
                     )
-                raise EmailVerifyError("Health check failed", "HEALTH_CHECK_FAILED", response.status_code)
+                raise BillionVerifyError("Health check failed", "HEALTH_CHECK_FAILED", response.status_code)
         except httpx.RequestError as e:
-            raise EmailVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0)
+            raise BillionVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0)
 
     async def verify(
         self,

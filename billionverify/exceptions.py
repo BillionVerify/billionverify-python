@@ -1,10 +1,10 @@
-"""EmailVerify SDK Exceptions."""
+"""BillionVerify SDK Exceptions."""
 
 from typing import Optional
 
 
-class EmailVerifyError(Exception):
-    """Base exception for EmailVerify SDK."""
+class BillionVerifyError(Exception):
+    """Base exception for BillionVerify SDK."""
 
     def __init__(
         self,
@@ -23,14 +23,14 @@ class EmailVerifyError(Exception):
         return f"{self.code}: {self.message}"
 
 
-class AuthenticationError(EmailVerifyError):
+class AuthenticationError(BillionVerifyError):
     """Raised when API key is invalid or missing."""
 
     def __init__(self, message: str = "Invalid or missing API key") -> None:
         super().__init__(message, "INVALID_API_KEY", 401)
 
 
-class RateLimitError(EmailVerifyError):
+class RateLimitError(BillionVerifyError):
     """Raised when rate limit is exceeded."""
 
     def __init__(
@@ -40,28 +40,28 @@ class RateLimitError(EmailVerifyError):
         self.retry_after = retry_after
 
 
-class ValidationError(EmailVerifyError):
+class ValidationError(BillionVerifyError):
     """Raised when request validation fails."""
 
     def __init__(self, message: str, details: Optional[str] = None) -> None:
         super().__init__(message, "INVALID_REQUEST", 400, details)
 
 
-class InsufficientCreditsError(EmailVerifyError):
+class InsufficientCreditsError(BillionVerifyError):
     """Raised when there are not enough credits."""
 
     def __init__(self, message: str = "Insufficient credits") -> None:
         super().__init__(message, "INSUFFICIENT_CREDITS", 402)
 
 
-class NotFoundError(EmailVerifyError):
+class NotFoundError(BillionVerifyError):
     """Raised when a resource is not found."""
 
     def __init__(self, message: str = "Resource not found") -> None:
         super().__init__(message, "NOT_FOUND", 404)
 
 
-class TimeoutError(EmailVerifyError):
+class TimeoutError(BillionVerifyError):
     """Raised when a request times out."""
 
     def __init__(self, message: str = "Request timed out") -> None:

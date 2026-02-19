@@ -1,4 +1,4 @@
-"""Basic usage examples for EmailVerify SDK.
+"""Basic usage examples for BillionVerify SDK.
 
 This example demonstrates:
 - Single email verification using verify()
@@ -9,9 +9,9 @@ This example demonstrates:
 
 import os
 
-from emailverify import (
+from billionverify import (
     AuthenticationError,
-    EmailVerify,
+    BillionVerify,
     InsufficientCreditsError,
     RateLimitError,
     TimeoutError,
@@ -19,7 +19,7 @@ from emailverify import (
 )
 
 # Get API key from environment variable
-API_KEY = os.getenv("EMAILVERIFY_API_KEY", "your-api-key")
+API_KEY = os.getenv("BILLIONVERIFY_API_KEY", "your-api-key")
 
 
 def single_email_verification():
@@ -28,7 +28,7 @@ def single_email_verification():
     print("Single Email Verification")
     print("=" * 50)
 
-    client = EmailVerify(api_key=API_KEY)
+    client = BillionVerify(api_key=API_KEY)
 
     try:
         # Verify a single email using the /verify/single endpoint
@@ -75,7 +75,7 @@ def bulk_email_verification():
     print("=" * 50)
 
     # Using context manager for automatic cleanup
-    with EmailVerify(api_key=API_KEY) as client:
+    with BillionVerify(api_key=API_KEY) as client:
         try:
             # Verify multiple emails (max 50)
             emails = [
@@ -117,7 +117,7 @@ def get_credits_example():
     print("Getting Credits")
     print("=" * 50)
 
-    with EmailVerify(api_key=API_KEY) as client:
+    with BillionVerify(api_key=API_KEY) as client:
         try:
             credits = client.get_credits()
 
@@ -139,7 +139,7 @@ def health_check_example():
     print("=" * 50)
 
     # Health check doesn't require authentication, but we still need a client
-    client = EmailVerify(api_key=API_KEY)
+    client = BillionVerify(api_key=API_KEY)
 
     try:
         health = client.health_check()
@@ -160,7 +160,7 @@ def error_handling_example():
     print("Error Handling")
     print("=" * 50)
 
-    with EmailVerify(api_key=API_KEY) as client:
+    with BillionVerify(api_key=API_KEY) as client:
         try:
             # Try to verify with too many emails (will fail validation)
             emails = [f"user{i}@example.com" for i in range(60)]  # More than 50
