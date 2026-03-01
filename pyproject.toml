@@ -47,7 +47,7 @@ dev = [
 [project.urls]
 Homepage = "https://billionverify.com"
 Documentation = "https://billionverify.com/docs"
-Repository = "https://github.com/BillionVerify/python-sdk"
+Repository = "https://github.com/BillionVerify/billionverify-python"
 
 [tool.hatch.build.targets.wheel]
 packages = ["billionverify"]
