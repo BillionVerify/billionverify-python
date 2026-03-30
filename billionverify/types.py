@@ -7,7 +7,16 @@ from typing import List, Literal, Optional
 VerificationStatus = Literal["valid", "invalid", "unknown", "risky", "disposable", "catchall", "role"]
 JobStatus = Literal["pending", "processing", "completed", "failed"]
 WebhookEvent = Literal["file.completed", "file.failed"]
-DomainReputation = Literal["high", "medium", "low", "unknown"]
+
+
+@dataclass
+class DomainReputation:
+    """Domain reputation details."""
+
+    mx_ip: str
+    is_listed: bool
+    blacklists: List[str]
+    checked: bool
 
 
 @dataclass
