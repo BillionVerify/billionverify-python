@@ -45,18 +45,19 @@ result = client.verify(
 )
 
 # Flat response structure
-print(result.email)           # 'user@example.com'
-print(result.status)          # 'valid', 'invalid', 'unknown', 'risky', 'disposable', 'catchall', 'role'
-print(result.score)           # 0.95
-print(result.is_deliverable)  # True
-print(result.is_disposable)   # False
-print(result.is_catchall)     # False
-print(result.is_role)         # False
-print(result.is_free)         # True
-print(result.domain)          # 'example.com'
-print(result.reason)          # 'Valid email address'
-print(result.smtp_check)      # True (whether SMTP was performed)
-print(result.credits_used)    # 1
+print(result.email)              # 'user@example.com'
+print(result.status)             # 'valid', 'invalid', 'unknown', 'risky', 'disposable', 'catchall', 'role'
+print(result.score)              # 0.95
+print(result.is_deliverable)     # True
+print(result.is_disposable)      # False
+print(result.is_catchall)        # False
+print(result.is_role)            # False
+print(result.is_free)            # True
+print(result.domain)             # 'example.com'
+print(result.reason)             # 'Valid email address'
+print(result.check_smtp)         # True (whether SMTP was performed)
+print(result.domain_suggestion)  # None or suggested domain correction
+print(result.credits_used)       # 1
 ```
 
 ## Bulk Email Verification (Synchronous)
@@ -71,7 +72,7 @@ response = client.verify_bulk(
 )
 
 # Returns BulkVerifyResponse directly
-print(f"Total: {response.total}")
+print(f"Total: {response.total_emails}")
 print(f"Credits used: {response.credits_used}")
 
 for result in response.results:
@@ -88,35 +89,36 @@ For large lists, use `upload_file()` for asynchronous file verification:
 
 ```python
 # Upload a file for async verification
-job = client.upload_file(
+task = client.upload_file(
     file_path="emails.csv",
     check_smtp=True,
     email_column="email",        # Column name for CSV files
     preserve_original=True,      # Keep original columns in results
 )
 
-print(f"Job ID: {job.job_id}")
-print(f"Status: {job.status}")
+print(f"Task ID: {task.task_id}")
+print(f"Status: {task.status}")
+print(f"Estimated count: {task.estimated_count}")
 
-# Get job status (with optional long-polling)
-status = client.get_file_job_status(
-    job_id=job.job_id,
+# Get task status (with optional long-polling)
+status = client.get_file_task_status(
+    task_id=task.task_id,
     timeout=60,  # Long-poll for up to 60 seconds (0-300)
 )
-print(f"Progress: {status.progress_percent}%")
+print(f"Progress: {status.progress}%")
+print(f"Processed: {status.processed_emails}/{status.total_emails}")
 
 # Wait for completion (polling)
-completed = client.wait_for_file_job(
-    job_id=job.job_id,
+completed = client.wait_for_file_task(
+    task_id=task.task_id,
     poll_interval=5.0,  # seconds
     max_wait=600.0,     # seconds
 )
 
-# Get results with filter options
-results = client.get_file_job_results(
-    job_id=job.job_id,
-    limit=100,
-    offset=0,
+# Download results as CSV with optional filters
+output_file = client.download_file_results(
+    task_id=task.task_id,
+    output_path="results.csv",
     valid=True,       # Include valid emails
     invalid=True,     # Include invalid emails
     unknown=True,     # Include unknown emails
@@ -125,9 +127,7 @@ results = client.get_file_job_results(
     catchall=True,    # Include catch-all emails
     role=True,        # Include role-based emails
 )
-
-for item in results.results:
-    print(f"{item.email}: {item.status}")
+print(f"Results saved to: {output_file}")
 ```
 
 ## Async Support
@@ -250,7 +250,8 @@ This SDK includes full type annotations for IDE support and type checking.
 from billionverify import (
     VerificationResult,
     BulkVerifyResponse,
-    FileJobResponse,
+    FileUploadResponse,
+    FileTaskStatus,
     CreditsResponse,
     VerificationStatus,
 )

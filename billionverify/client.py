@@ -22,9 +22,8 @@ from .types import (
     BulkVerifyResponse,
     CreditsResponse,
     DomainReputation,
-    FileJobResponse,
-    FileResultItem,
-    FileResultsResponse,
+    FileTaskStatus,
+    FileUploadResponse,
     HealthCheckResponse,
     VerificationResult,
     VerificationStatus,
@@ -35,6 +34,7 @@ from .types import (
 DEFAULT_BASE_URL = "https://api.billionverify.com/v1"
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_RETRIES = 3
+SDK_VERSION = "1.1.0"
 
 
 class BillionVerify:
@@ -66,9 +66,9 @@ class BillionVerify:
             base_url=self.base_url,
             timeout=self.timeout,
             headers={
-                "EV-API-KEY": self.api_key,
+                "BV-API-KEY": self.api_key,
                 "Content-Type": "application/json",
-                "User-Agent": "billionverify-python/1.0.0",
+                "User-Agent": f"billionverify-python/{SDK_VERSION}",
             },
         )
 
@@ -99,17 +99,18 @@ class BillionVerify:
             if skip_auth:
                 headers = {
                     "Content-Type": "application/json",
-                    "User-Agent": "billionverify-python/1.0.0",
+                    "User-Agent": f"billionverify-python/{SDK_VERSION}",
                 }
 
             request_timeout = custom_timeout if custom_timeout else self.timeout
 
             if files:
-                # For file uploads, remove Content-Type header to let httpx set it
-                upload_headers = {"EV-API-KEY": self.api_key, "User-Agent": "billionverify-python/1.0.0"}
-                response = self._client.request(
+                # For file uploads, use a standalone request to avoid the client's
+                # default Content-Type: application/json which prevents multipart encoding
+                upload_headers = {"BV-API-KEY": self.api_key, "User-Agent": f"billionverify-python/{SDK_VERSION}"}
+                response = httpx.request(
                     method=method,
-                    url=path,
+                    url=f"{self.base_url}{path}",
                     files=files,
                     data=json,  # Form data for multipart
                     headers=upload_headers,
@@ -148,6 +149,34 @@ class BillionVerify:
             return result
 
         self._handle_error(response, method, path, json, params, attempt, files, custom_timeout, skip_auth)
+
+    def _request_raw(
+        self,
+        method: str,
+        path: str,
+        params: Optional[Dict[str, Any]] = None,
+        custom_timeout: Optional[float] = None,
+    ) -> httpx.Response:
+        """Make an HTTP request and return the raw response (for file downloads)."""
+        try:
+            response = self._client.request(
+                method=method,
+                url=path,
+                params=params,
+                timeout=custom_timeout or self.timeout,
+                follow_redirects=True,
+            )
+        except httpx.TimeoutException as e:
+            raise TimeoutError(f"Request timed out: {e}")
+        except httpx.RequestError as e:
+            raise BillionVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0)
+
+        if response.is_success:
+            return response
+
+        self._handle_error(response, method, path, None, params, 1)
+        # unreachable, _handle_error always raises
+        raise BillionVerifyError("Unexpected error", "UNKNOWN_ERROR", 0)
 
     def _handle_error(
         self,
@@ -252,14 +281,18 @@ class BillionVerify:
             is_role=data["is_role"],
             is_free=data["is_free"],
             domain=data["domain"],
+            check_smtp=data["check_smtp"],
+            reason=data.get("reason", ""),
+            response_time=data["response_time"],
+            credits_used=data["credits_used"],
             domain_age=data.get("domain_age"),
             mx_records=data.get("mx_records", []),
             domain_reputation=DomainReputation(**data["domain_reputation"]) if data.get("domain_reputation") else None,
-            smtp_check=data["smtp_check"],
-            reason=data["reason"],
-            suggestion=data.get("suggestion"),
-            response_time=data["response_time"],
-            credits_used=data["credits_used"],
+            domain_suggestion=data.get("domain_suggestion"),
+            has_gravatar=data.get("has_gravatar", False),
+            gravatar_url=data.get("gravatar_url"),
+            smtp_response=data.get("smtp_response"),
+            error_message=data.get("error_message"),
         )
 
     def verify_bulk(
@@ -314,17 +347,17 @@ class BillionVerify:
         check_smtp: bool = True,
         email_column: Optional[str] = None,
         preserve_original: bool = False,
-    ) -> FileJobResponse:
+    ) -> FileUploadResponse:
         """Upload a file for email verification.
 
         Args:
-            file_path: Path to the CSV or TXT file to upload.
+            file_path: Path to the CSV, Excel, or TXT file to upload.
             check_smtp: Whether to perform SMTP verification (default: True).
             email_column: Name of the column containing emails (for CSV files).
             preserve_original: Whether to preserve original columns in results (default: False).
 
         Returns:
-            FileJobResponse with job information.
+            FileUploadResponse with task information.
         """
         path = Path(file_path)
         if not path.exists():
@@ -339,35 +372,34 @@ class BillionVerify:
 
             data = self._request("POST", "/verify/file", json=form_data, files=files)
 
-        return FileJobResponse(
-            job_id=data["job_id"],
+        return FileUploadResponse(
+            task_id=data["task_id"],
+            file_name=data["file_name"],
+            file_size=data["file_size"],
             status=data["status"],
-            total=data["total"],
-            processed=data["processed"],
-            valid=data["valid"],
-            invalid=data["invalid"],
-            unknown=data["unknown"],
-            credits_used=data["credits_used"],
+            message=data["message"],
+            status_url=data["status_url"],
             created_at=data["created_at"],
-            completed_at=data.get("completed_at"),
-            progress_percent=data.get("progress_percent"),
-            filename=data.get("filename"),
+            estimated_count=data["estimated_count"],
+            unique_emails=data.get("unique_emails"),
+            total_rows=data.get("total_rows"),
+            email_column=data.get("email_column"),
         )
 
-    def get_file_job_status(
+    def get_file_task_status(
         self,
-        job_id: str,
+        task_id: str,
         timeout: int = 0,
-    ) -> FileJobResponse:
-        """Get the status of a file verification job.
+    ) -> FileTaskStatus:
+        """Get the status of a file verification task.
 
         Args:
-            job_id: The file job ID.
+            task_id: The file task ID.
             timeout: Long-polling timeout in seconds (0-300). If > 0, the request
-                     will wait up to this many seconds for the job to complete.
+                     will wait up to this many seconds for the task to complete.
 
         Returns:
-            FileJobResponse with current job status.
+            FileTaskStatus with current task status.
         """
         params: Dict[str, Any] = {}
         if timeout > 0:
@@ -378,28 +410,14 @@ class BillionVerify:
         # Adjust request timeout for long-polling
         custom_timeout = self.timeout + timeout if timeout > 0 else None
 
-        data = self._request("GET", f"/verify/file/{job_id}", params=params if params else None, custom_timeout=custom_timeout)
+        data = self._request("GET", f"/verify/file/{task_id}", params=params if params else None, custom_timeout=custom_timeout)
 
-        return FileJobResponse(
-            job_id=data["job_id"],
-            status=data["status"],
-            total=data["total"],
-            processed=data["processed"],
-            valid=data["valid"],
-            invalid=data["invalid"],
-            unknown=data["unknown"],
-            credits_used=data["credits_used"],
-            created_at=data["created_at"],
-            completed_at=data.get("completed_at"),
-            progress_percent=data.get("progress_percent"),
-            filename=data.get("filename"),
-        )
+        return self._parse_file_task_status(data)
 
-    def get_file_job_results(
+    def download_file_results(
         self,
-        job_id: str,
-        limit: int = 100,
-        offset: int = 0,
+        task_id: str,
+        output_path: str,
         valid: Optional[bool] = None,
         invalid: Optional[bool] = None,
         catchall: Optional[bool] = None,
@@ -407,13 +425,12 @@ class BillionVerify:
         unknown: Optional[bool] = None,
         disposable: Optional[bool] = None,
         risky: Optional[bool] = None,
-    ) -> FileResultsResponse:
-        """Get the results of a completed file verification job.
+    ) -> str:
+        """Download the results of a completed file verification task as CSV.
 
         Args:
-            job_id: The file job ID.
-            limit: Number of results per page (default: 100, max: 1000).
-            offset: Starting position (default: 0).
+            task_id: The file task ID.
+            output_path: Path to save the CSV file.
             valid: Include valid emails in results.
             invalid: Include invalid emails in results.
             catchall: Include catch-all emails in results.
@@ -423,11 +440,10 @@ class BillionVerify:
             risky: Include risky emails in results.
 
         Returns:
-            FileResultsResponse with verification results.
+            The path to the saved CSV file.
         """
-        params: Dict[str, Any] = {"limit": limit, "offset": offset}
+        params: Dict[str, Any] = {}
 
-        # Add filter parameters
         if valid is not None:
             params["valid"] = str(valid).lower()
         if invalid is not None:
@@ -443,63 +459,42 @@ class BillionVerify:
         if risky is not None:
             params["risky"] = str(risky).lower()
 
-        data = self._request("GET", f"/verify/file/{job_id}/results", params=params)
+        response = self._request_raw("GET", f"/verify/file/{task_id}/results", params=params if params else None)
 
-        results = [
-            FileResultItem(
-                email=item["email"],
-                status=item["status"],
-                score=item["score"],
-                is_deliverable=item["is_deliverable"],
-                is_disposable=item["is_disposable"],
-                is_catchall=item["is_catchall"],
-                is_role=item["is_role"],
-                is_free=item["is_free"],
-                domain=item["domain"],
-                reason=item["reason"],
-                original_row=item.get("original_row"),
-            )
-            for item in data["results"]
-        ]
+        out = Path(output_path)
+        out.write_bytes(response.content)
+        return str(out)
 
-        return FileResultsResponse(
-            job_id=data["job_id"],
-            total=data["total"],
-            limit=data["limit"],
-            offset=data["offset"],
-            results=results,
-        )
-
-    def wait_for_file_job(
+    def wait_for_file_task(
         self,
-        job_id: str,
+        task_id: str,
         poll_interval: float = 5.0,
         max_wait: float = 600.0,
-    ) -> FileJobResponse:
-        """Poll for file job completion.
+    ) -> FileTaskStatus:
+        """Poll for file task completion.
 
         Args:
-            job_id: The file job ID.
+            task_id: The file task ID.
             poll_interval: Time between polls in seconds (default: 5).
             max_wait: Maximum wait time in seconds (default: 600).
 
         Returns:
-            FileJobResponse when job completes.
+            FileTaskStatus when task completes.
 
         Raises:
-            TimeoutError: If job doesn't complete within max_wait.
+            TimeoutError: If task doesn't complete within max_wait.
         """
         start_time = time.time()
 
         while time.time() - start_time < max_wait:
-            status = self.get_file_job_status(job_id)
+            status = self.get_file_task_status(task_id)
 
             if status.status in ("completed", "failed"):
                 return status
 
             time.sleep(poll_interval)
 
-        raise TimeoutError(f"File job {job_id} did not complete within {max_wait}s")
+        raise TimeoutError(f"File task {task_id} did not complete within {max_wait}s")
 
     def get_credits(self) -> CreditsResponse:
         """Get current credit balance.
@@ -595,6 +590,39 @@ class BillionVerify:
         expected = f"sha256={hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()}"
         return hmac.compare_digest(signature, expected)
 
+    @staticmethod
+    def _parse_file_task_status(data: Dict[str, Any]) -> FileTaskStatus:
+        """Parse file task status response into FileTaskStatus."""
+        return FileTaskStatus(
+            task_id=data["task_id"],
+            status=data["status"],
+            progress=data.get("progress", 0),
+            total_emails=data.get("total_emails", 0),
+            processed_emails=data.get("processed_emails", 0),
+            valid_emails=data.get("valid_emails", 0),
+            invalid_emails=data.get("invalid_emails", 0),
+            unknown_emails=data.get("unknown_emails", 0),
+            credits_used=data.get("credits_used", 0),
+            risky_emails=data.get("risky_emails", 0),
+            disposable_emails=data.get("disposable_emails", 0),
+            role_emails=data.get("role_emails", 0),
+            catchall_emails=data.get("catchall_emails", 0),
+            started_at=data.get("started_at"),
+            completed_at=data.get("completed_at"),
+            error_message=data.get("error_message"),
+            download_url=data.get("download_url"),
+            direct_download_url=data.get("direct_download_url"),
+            direct_download_expires_at=data.get("direct_download_expires_at"),
+            can_pause=data.get("can_pause", False),
+            can_resume=data.get("can_resume", False),
+            can_restart=data.get("can_restart", False),
+            total_chunks=data.get("total_chunks"),
+            completed_chunks=data.get("completed_chunks"),
+            failed_chunks=data.get("failed_chunks"),
+            unique_emails=data.get("unique_emails"),
+            total_rows=data.get("total_rows"),
+        )
+
 
 class AsyncBillionVerify:
     """Async BillionVerify API Client."""
@@ -618,9 +646,9 @@ class AsyncBillionVerify:
             base_url=self.base_url,
             timeout=self.timeout,
             headers={
-                "EV-API-KEY": self.api_key,
+                "BV-API-KEY": self.api_key,
                 "Content-Type": "application/json",
-                "User-Agent": "billionverify-python/1.0.0",
+                "User-Agent": f"billionverify-python/{SDK_VERSION}",
             },
         )
 
@@ -653,21 +681,24 @@ class AsyncBillionVerify:
             if skip_auth:
                 headers = {
                     "Content-Type": "application/json",
-                    "User-Agent": "billionverify-python/1.0.0",
+                    "User-Agent": f"billionverify-python/{SDK_VERSION}",
                 }
 
             request_timeout = custom_timeout if custom_timeout else self.timeout
 
             if files:
-                upload_headers = {"EV-API-KEY": self.api_key, "User-Agent": "billionverify-python/1.0.0"}
-                response = await self._client.request(
-                    method=method,
-                    url=path,
-                    files=files,
-                    data=json,
-                    headers=upload_headers,
-                    timeout=request_timeout,
-                )
+                # For file uploads, use a standalone client to avoid the default
+                # Content-Type: application/json which prevents multipart encoding
+                upload_headers = {"BV-API-KEY": self.api_key, "User-Agent": f"billionverify-python/{SDK_VERSION}"}
+                async with httpx.AsyncClient() as upload_client:
+                    response = await upload_client.request(
+                        method=method,
+                        url=f"{self.base_url}{path}",
+                        files=files,
+                        data=json,
+                        headers=upload_headers,
+                        timeout=request_timeout,
+                    )
             elif skip_auth:
                 async with httpx.AsyncClient() as client:
                     response = await client.request(
@@ -695,9 +726,40 @@ class AsyncBillionVerify:
             return None
 
         if response.is_success:
-            return response.json()
+            result = response.json()
+            # Extract data from API wrapper response {success, code, message, data}
+            if isinstance(result, dict) and "data" in result:
+                return result["data"]
+            return result
 
         await self._handle_error(response, method, path, json, params, attempt, files, custom_timeout, skip_auth)
+
+    async def _request_raw(
+        self,
+        method: str,
+        path: str,
+        params: Optional[Dict[str, Any]] = None,
+        custom_timeout: Optional[float] = None,
+    ) -> httpx.Response:
+        """Make an async HTTP request and return the raw response (for file downloads)."""
+        try:
+            response = await self._client.request(
+                method=method,
+                url=path,
+                params=params,
+                timeout=custom_timeout or self.timeout,
+                follow_redirects=True,
+            )
+        except httpx.TimeoutException as e:
+            raise TimeoutError(f"Request timed out: {e}")
+        except httpx.RequestError as e:
+            raise BillionVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0)
+
+        if response.is_success:
+            return response
+
+        await self._handle_error(response, method, path, None, params, 1)
+        raise BillionVerifyError("Unexpected error", "UNKNOWN_ERROR", 0)
 
     async def _handle_error(
         self,
@@ -754,11 +816,7 @@ class AsyncBillionVerify:
         raise BillionVerifyError(message, code, status, details)
 
     async def health_check(self) -> HealthCheckResponse:
-        """Check API health status (no authentication required).
-
-        Returns:
-            HealthCheckResponse with status information.
-        """
+        """Check API health status (no authentication required)."""
         base_without_version = self.base_url.replace("/v1", "")
         try:
             async with httpx.AsyncClient() as client:
@@ -796,14 +854,18 @@ class AsyncBillionVerify:
             is_role=data["is_role"],
             is_free=data["is_free"],
             domain=data["domain"],
+            check_smtp=data["check_smtp"],
+            reason=data.get("reason", ""),
+            response_time=data["response_time"],
+            credits_used=data["credits_used"],
             domain_age=data.get("domain_age"),
             mx_records=data.get("mx_records", []),
             domain_reputation=DomainReputation(**data["domain_reputation"]) if data.get("domain_reputation") else None,
-            smtp_check=data["smtp_check"],
-            reason=data["reason"],
-            suggestion=data.get("suggestion"),
-            response_time=data["response_time"],
-            credits_used=data["credits_used"],
+            domain_suggestion=data.get("domain_suggestion"),
+            has_gravatar=data.get("has_gravatar", False),
+            gravatar_url=data.get("gravatar_url"),
+            smtp_response=data.get("smtp_response"),
+            error_message=data.get("error_message"),
         )
 
     async def verify_bulk(
@@ -850,7 +912,7 @@ class AsyncBillionVerify:
         check_smtp: bool = True,
         email_column: Optional[str] = None,
         preserve_original: bool = False,
-    ) -> FileJobResponse:
+    ) -> FileUploadResponse:
         """Upload a file for email verification."""
         path = Path(file_path)
         if not path.exists():
@@ -865,27 +927,26 @@ class AsyncBillionVerify:
 
             data = await self._request("POST", "/verify/file", json=form_data, files=files)
 
-        return FileJobResponse(
-            job_id=data["job_id"],
+        return FileUploadResponse(
+            task_id=data["task_id"],
+            file_name=data["file_name"],
+            file_size=data["file_size"],
             status=data["status"],
-            total=data["total"],
-            processed=data["processed"],
-            valid=data["valid"],
-            invalid=data["invalid"],
-            unknown=data["unknown"],
-            credits_used=data["credits_used"],
+            message=data["message"],
+            status_url=data["status_url"],
             created_at=data["created_at"],
-            completed_at=data.get("completed_at"),
-            progress_percent=data.get("progress_percent"),
-            filename=data.get("filename"),
+            estimated_count=data["estimated_count"],
+            unique_emails=data.get("unique_emails"),
+            total_rows=data.get("total_rows"),
+            email_column=data.get("email_column"),
         )
 
-    async def get_file_job_status(
+    async def get_file_task_status(
         self,
-        job_id: str,
+        task_id: str,
         timeout: int = 0,
-    ) -> FileJobResponse:
-        """Get the status of a file verification job."""
+    ) -> FileTaskStatus:
+        """Get the status of a file verification task."""
         params: Dict[str, Any] = {}
         if timeout > 0:
             if timeout > 300:
@@ -894,28 +955,14 @@ class AsyncBillionVerify:
 
         custom_timeout = self.timeout + timeout if timeout > 0 else None
 
-        data = await self._request("GET", f"/verify/file/{job_id}", params=params if params else None, custom_timeout=custom_timeout)
+        data = await self._request("GET", f"/verify/file/{task_id}", params=params if params else None, custom_timeout=custom_timeout)
 
-        return FileJobResponse(
-            job_id=data["job_id"],
-            status=data["status"],
-            total=data["total"],
-            processed=data["processed"],
-            valid=data["valid"],
-            invalid=data["invalid"],
-            unknown=data["unknown"],
-            credits_used=data["credits_used"],
-            created_at=data["created_at"],
-            completed_at=data.get("completed_at"),
-            progress_percent=data.get("progress_percent"),
-            filename=data.get("filename"),
-        )
+        return BillionVerify._parse_file_task_status(data)
 
-    async def get_file_job_results(
+    async def download_file_results(
         self,
-        job_id: str,
-        limit: int = 100,
-        offset: int = 0,
+        task_id: str,
+        output_path: str,
         valid: Optional[bool] = None,
         invalid: Optional[bool] = None,
         catchall: Optional[bool] = None,
@@ -923,9 +970,9 @@ class AsyncBillionVerify:
         unknown: Optional[bool] = None,
         disposable: Optional[bool] = None,
         risky: Optional[bool] = None,
-    ) -> FileResultsResponse:
-        """Get the results of a completed file verification job."""
-        params: Dict[str, Any] = {"limit": limit, "offset": offset}
+    ) -> str:
+        """Download the results of a completed file verification task as CSV."""
+        params: Dict[str, Any] = {}
 
         if valid is not None:
             params["valid"] = str(valid).lower()
@@ -942,55 +989,32 @@ class AsyncBillionVerify:
         if risky is not None:
             params["risky"] = str(risky).lower()
 
-        data = await self._request(
-            "GET", f"/verify/file/{job_id}/results", params=params
-        )
+        response = await self._request_raw("GET", f"/verify/file/{task_id}/results", params=params if params else None)
 
-        results = [
-            FileResultItem(
-                email=item["email"],
-                status=item["status"],
-                score=item["score"],
-                is_deliverable=item["is_deliverable"],
-                is_disposable=item["is_disposable"],
-                is_catchall=item["is_catchall"],
-                is_role=item["is_role"],
-                is_free=item["is_free"],
-                domain=item["domain"],
-                reason=item["reason"],
-                original_row=item.get("original_row"),
-            )
-            for item in data["results"]
-        ]
+        out = Path(output_path)
+        out.write_bytes(response.content)
+        return str(out)
 
-        return FileResultsResponse(
-            job_id=data["job_id"],
-            total=data["total"],
-            limit=data["limit"],
-            offset=data["offset"],
-            results=results,
-        )
-
-    async def wait_for_file_job(
+    async def wait_for_file_task(
         self,
-        job_id: str,
+        task_id: str,
         poll_interval: float = 5.0,
         max_wait: float = 600.0,
-    ) -> FileJobResponse:
-        """Poll for file job completion."""
+    ) -> FileTaskStatus:
+        """Poll for file task completion."""
         import asyncio
 
         start_time = time.time()
 
         while time.time() - start_time < max_wait:
-            status = await self.get_file_job_status(job_id)
+            status = await self.get_file_task_status(task_id)
 
             if status.status in ("completed", "failed"):
                 return status
 
             await asyncio.sleep(poll_interval)
 
-        raise TimeoutError(f"File job {job_id} did not complete within {max_wait}s")
+        raise TimeoutError(f"File task {task_id} did not complete within {max_wait}s")
 
     async def get_credits(self) -> CreditsResponse:
         """Get current credit balance."""

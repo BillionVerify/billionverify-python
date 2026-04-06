@@ -15,9 +15,8 @@ from .types import (
     BulkVerifyResponse,
     CreditsResponse,
     DomainReputation,
-    FileJobResponse,
-    FileResultItem,
-    FileResultsResponse,
+    FileTaskStatus,
+    FileUploadResponse,
     HealthCheckResponse,
     JobStatus,
     VerificationResult,
@@ -26,7 +25,7 @@ from .types import (
     WebhookEvent,
 )
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 __all__ = [
     # Clients
@@ -37,9 +36,8 @@ __all__ = [
     "VerificationStatus",
     "BulkVerificationResult",
     "BulkVerifyResponse",
-    "FileJobResponse",
-    "FileResultItem",
-    "FileResultsResponse",
+    "FileUploadResponse",
+    "FileTaskStatus",
     "CreditsResponse",
     "HealthCheckResponse",
     "DomainReputation",
