@@ -1,4 +1,4 @@
-"""Basic usage examples for BillionVerify SDK.
+"""Basic usage examples for BillionVerify Python SDK.
 
 This example demonstrates:
 - Single email verification using verify()
@@ -48,11 +48,11 @@ def single_email_verification():
         print(f"Is Free: {result.is_free}")
         print(f"Domain: {result.domain}")
         print(f"Reason: {result.reason}")
-        print(f"SMTP Check: {result.smtp_check}")
+        print(f"SMTP Check: {result.check_smtp}")
         print(f"Credits Used: {result.credits_used}")
 
-        if result.suggestion:
-            print(f"Suggestion: {result.suggestion}")
+        if result.domain_suggestion:
+            print(f"Domain Suggestion: {result.domain_suggestion}")
 
         if result.mx_records:
             print(f"MX Records: {', '.join(result.mx_records)}")

@@ -1,4 +1,4 @@
-"""BillionVerify SDK Types."""
+"""BillionVerify Python SDK Types."""
 
 from dataclasses import dataclass, field
 from typing import List, Literal, Optional

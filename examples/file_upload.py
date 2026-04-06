@@ -1,10 +1,10 @@
-"""File upload example for BillionVerify SDK.
+"""File upload example for BillionVerify Python SDK.
 
 This example demonstrates:
 - File upload using upload_file() for async verification
-- Getting job status with get_file_job_status() (with timeout for long-polling)
-- Downloading results with get_file_job_results() with filter options
-- Waiting for job completion using wait_for_file_job()
+- Getting task status with get_file_task_status() (with timeout for long-polling)
+- Downloading results as CSV with download_file_results() with filter options
+- Waiting for task completion using wait_for_file_task()
 """
 
 import os
@@ -50,21 +50,22 @@ def upload_file_example():
     with BillionVerify(api_key=API_KEY) as client:
         try:
             # Upload the file using upload_file()
-            job = client.upload_file(
+            task = client.upload_file(
                 file_path=csv_path,
                 check_smtp=True,
                 email_column="email",        # Specify the email column name
                 preserve_original=True,      # Keep original columns in results
             )
 
-            print(f"\nJob submitted successfully!")
-            print(f"Job ID: {job.job_id}")
-            print(f"Status: {job.status}")
-            print(f"Total emails: {job.total}")
-            print(f"Filename: {job.filename}")
-            print(f"Created at: {job.created_at}")
+            print(f"\nTask submitted successfully!")
+            print(f"Task ID: {task.task_id}")
+            print(f"Status: {task.status}")
+            print(f"File name: {task.file_name}")
+            print(f"Estimated count: {task.estimated_count}")
+            print(f"Unique emails: {task.unique_emails}")
+            print(f"Status URL: {task.status_url}")
 
-            return job.job_id
+            return task.task_id
 
         except ValidationError as e:
             print(f"Validation error: {e.message}")
@@ -78,162 +79,118 @@ def upload_file_example():
     return None
 
 
-def get_job_status_example(job_id: str):
-    """Get job status with optional long-polling."""
+def get_task_status_example(task_id: str):
+    """Get task status with optional long-polling."""
     print("\n" + "=" * 50)
-    print("Getting Job Status")
+    print("Getting Task Status")
     print("=" * 50)
 
     with BillionVerify(api_key=API_KEY) as client:
         try:
-            # Get job status without long-polling
-            status = client.get_file_job_status(job_id)
+            # Get task status without long-polling
+            status = client.get_file_task_status(task_id)
 
-            print(f"Job ID: {status.job_id}")
+            print(f"Task ID: {status.task_id}")
             print(f"Status: {status.status}")
-            print(f"Progress: {status.progress_percent}%")
-            print(f"Total: {status.total}")
-            print(f"Processed: {status.processed}")
-            print(f"Valid: {status.valid}")
-            print(f"Invalid: {status.invalid}")
-            print(f"Unknown: {status.unknown}")
+            print(f"Progress: {status.progress}%")
+            print(f"Total emails: {status.total_emails}")
+            print(f"Processed: {status.processed_emails}")
+            print(f"Valid: {status.valid_emails}")
+            print(f"Invalid: {status.invalid_emails}")
+            print(f"Unknown: {status.unknown_emails}")
             print(f"Credits used: {status.credits_used}")
 
-            # Get job status with long-polling (wait up to 60 seconds for completion)
+            # Get task status with long-polling (wait up to 60 seconds for completion)
             print("\nWaiting with long-polling (up to 60 seconds)...")
-            status = client.get_file_job_status(
-                job_id=job_id,
+            status = client.get_file_task_status(
+                task_id=task_id,
                 timeout=60,  # Long-poll timeout in seconds (0-300)
             )
             print(f"After long-poll - Status: {status.status}")
 
         except NotFoundError:
-            print(f"Job not found: {job_id}")
+            print(f"Task not found: {task_id}")
         except ValidationError as e:
             print(f"Validation error: {e.message}")
 
 
-def wait_for_completion_example(job_id: str):
-    """Wait for job completion using polling."""
+def wait_for_completion_example(task_id: str):
+    """Wait for task completion using polling."""
     print("\n" + "=" * 50)
-    print("Waiting for Job Completion")
+    print("Waiting for Task Completion")
     print("=" * 50)
 
     with BillionVerify(api_key=API_KEY) as client:
         try:
-            # Wait for the job to complete
+            # Wait for the task to complete
             print("Polling for completion...")
-            completed = client.wait_for_file_job(
-                job_id=job_id,
+            completed = client.wait_for_file_task(
+                task_id=task_id,
                 poll_interval=5.0,  # Check every 5 seconds
                 max_wait=600.0,     # Maximum wait time of 10 minutes
             )
 
-            print(f"Job completed!")
+            print(f"Task completed!")
             print(f"Status: {completed.status}")
-            print(f"Total: {completed.total}")
-            print(f"Valid: {completed.valid}")
-            print(f"Invalid: {completed.invalid}")
-            print(f"Unknown: {completed.unknown}")
+            print(f"Total emails: {completed.total_emails}")
+            print(f"Valid: {completed.valid_emails}")
+            print(f"Invalid: {completed.invalid_emails}")
+            print(f"Unknown: {completed.unknown_emails}")
             print(f"Credits used: {completed.credits_used}")
 
             if completed.completed_at:
                 print(f"Completed at: {completed.completed_at}")
 
+            if completed.download_url:
+                print(f"Download URL: {completed.download_url}")
+
             return completed.status == "completed"
 
         except TimeoutError as e:
-            print(f"Timeout waiting for job: {e}")
+            print(f"Timeout waiting for task: {e}")
         except NotFoundError:
-            print(f"Job not found: {job_id}")
+            print(f"Task not found: {task_id}")
 
     return False
 
 
-def get_results_example(job_id: str):
-    """Get job results with filter options."""
+def download_results_example(task_id: str):
+    """Download task results as CSV with filter options."""
     print("\n" + "=" * 50)
-    print("Getting Job Results")
+    print("Downloading Task Results")
     print("=" * 50)
 
     with BillionVerify(api_key=API_KEY) as client:
         try:
-            # Get all results
-            print("Fetching all results...")
-            results = client.get_file_job_results(
-                job_id=job_id,
-                limit=100,
-                offset=0,
+            # Download all results
+            print("Downloading all results...")
+            output = client.download_file_results(
+                task_id=task_id,
+                output_path="results_all.csv",
             )
+            print(f"All results saved to: {output}")
 
-            print(f"Job ID: {results.job_id}")
-            print(f"Total: {results.total}")
-            print(f"Returned: {len(results.results)} (limit: {results.limit}, offset: {results.offset})")
-
-            print("\nAll Results:")
-            for item in results.results:
-                print(f"\n  {item.email}:")
-                print(f"    Status: {item.status}")
-                print(f"    Score: {item.score}")
-                print(f"    Deliverable: {item.is_deliverable}")
-                print(f"    Disposable: {item.is_disposable}")
-                print(f"    Catchall: {item.is_catchall}")
-                print(f"    Role: {item.is_role}")
-                print(f"    Domain: {item.domain}")
-                print(f"    Reason: {item.reason}")
-                if item.original_row:
-                    print(f"    Original data: {item.original_row}")
-
-            # Get only valid emails
-            print("\n" + "-" * 30)
-            print("Fetching only valid emails...")
-            valid_results = client.get_file_job_results(
-                job_id=job_id,
+            # Download only valid emails
+            print("\nDownloading only valid emails...")
+            output = client.download_file_results(
+                task_id=task_id,
+                output_path="results_valid.csv",
                 valid=True,
-                invalid=False,
-                unknown=False,
-                disposable=False,
-                catchall=False,
-                role=False,
-                risky=False,
             )
-            print(f"Valid emails: {len(valid_results.results)}")
+            print(f"Valid results saved to: {output}")
 
-            # Get only invalid and risky emails
-            print("\n" + "-" * 30)
-            print("Fetching invalid and risky emails...")
-            bad_results = client.get_file_job_results(
-                job_id=job_id,
-                valid=False,
+            # Download only invalid and risky emails
+            print("\nDownloading invalid and risky emails...")
+            output = client.download_file_results(
+                task_id=task_id,
+                output_path="results_bad.csv",
                 invalid=True,
                 risky=True,
             )
-            print(f"Invalid/risky emails: {len(bad_results.results)}")
-
-            # Pagination example
-            print("\n" + "-" * 30)
-            print("Pagination example...")
-            page_size = 2
-            offset = 0
-            all_emails = []
-
-            while True:
-                page = client.get_file_job_results(
-                    job_id=job_id,
-                    limit=page_size,
-                    offset=offset,
-                )
-                all_emails.extend(page.results)
-                print(f"  Fetched {len(page.results)} results (offset: {offset})")
-
-                if len(page.results) < page_size:
-                    break
-                offset += page_size
-
-            print(f"Total fetched via pagination: {len(all_emails)}")
+            print(f"Invalid/risky results saved to: {output}")
 
         except NotFoundError:
-            print(f"Job not found: {job_id}")
+            print(f"Task not found: {task_id}")
         except ValidationError as e:
             print(f"Validation error: {e.message}")
 
@@ -251,45 +208,45 @@ def full_workflow_example():
         try:
             # Step 1: Upload the file
             print("\nStep 1: Uploading file...")
-            job = client.upload_file(
+            task = client.upload_file(
                 file_path=csv_path,
                 check_smtp=True,
                 email_column="email",
                 preserve_original=True,
             )
-            print(f"Job created: {job.job_id}")
+            print(f"Task created: {task.task_id}")
 
             # Step 2: Wait for completion
             print("\nStep 2: Waiting for completion...")
-            completed = client.wait_for_file_job(
-                job_id=job.job_id,
+            completed = client.wait_for_file_task(
+                task_id=task.task_id,
                 poll_interval=2.0,
                 max_wait=300.0,
             )
-            print(f"Job status: {completed.status}")
+            print(f"Task status: {completed.status}")
 
             if completed.status == "failed":
-                print("Job failed!")
+                print(f"Task failed: {completed.error_message}")
                 return
 
-            # Step 3: Get results
-            print("\nStep 3: Fetching results...")
-            results = client.get_file_job_results(job.job_id)
+            # Step 3: Download results
+            print("\nStep 3: Downloading results...")
+            output = client.download_file_results(
+                task_id=task.task_id,
+                output_path="verification_results.csv",
+            )
 
-            # Step 4: Process results
-            print("\nStep 4: Processing results...")
-            valid_count = sum(1 for r in results.results if r.status == "valid")
-            invalid_count = sum(1 for r in results.results if r.status == "invalid")
-            disposable_count = sum(1 for r in results.results if r.is_disposable)
-            catchall_count = sum(1 for r in results.results if r.is_catchall)
-
+            # Step 4: Print summary
             print(f"\nSummary:")
-            print(f"  Total: {results.total}")
-            print(f"  Valid: {valid_count}")
-            print(f"  Invalid: {invalid_count}")
-            print(f"  Disposable: {disposable_count}")
-            print(f"  Catch-all: {catchall_count}")
+            print(f"  Total: {completed.total_emails}")
+            print(f"  Valid: {completed.valid_emails}")
+            print(f"  Invalid: {completed.invalid_emails}")
+            print(f"  Unknown: {completed.unknown_emails}")
+            print(f"  Risky: {completed.risky_emails}")
+            print(f"  Disposable: {completed.disposable_emails}")
+            print(f"  Catchall: {completed.catchall_emails}")
             print(f"  Credits used: {completed.credits_used}")
+            print(f"  Results saved to: {output}")
 
         except TimeoutError as e:
             print(f"Timeout: {e}")
@@ -305,8 +262,8 @@ if __name__ == "__main__":
     full_workflow_example()
 
     # Or run individual examples:
-    # job_id = upload_file_example()
-    # if job_id:
-    #     get_job_status_example(job_id)
-    #     if wait_for_completion_example(job_id):
-    #         get_results_example(job_id)
+    # task_id = upload_file_example()
+    # if task_id:
+    #     get_task_status_example(task_id)
+    #     if wait_for_completion_example(task_id):
+    #         download_results_example(task_id)

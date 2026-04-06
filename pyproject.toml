@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "billionverify"
 version = "1.1.0"
-description = "Official BillionVerify Python SDK for email verification"
+description = "BillionVerify Python SDK - Official SDK for BillionVerify email verification API"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.8"
@@ -47,7 +47,7 @@ dev = [
 [project.urls]
 Homepage = "https://billionverify.com"
 Documentation = "https://billionverify.com/docs"
-Repository = "https://github.com/BillionVerify/billionverify-python"
+Repository = "https://github.com/BillionVerify/python-sdk"
 
 [tool.hatch.build.targets.wheel]
 packages = ["billionverify"]

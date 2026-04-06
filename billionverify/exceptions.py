@@ -1,4 +1,4 @@
-"""BillionVerify SDK Exceptions."""
+"""BillionVerify Python SDK Exceptions."""
 
 from typing import Optional
 

@@ -1,4 +1,4 @@
-"""BillionVerify SDK Client."""
+"""BillionVerify Python SDK Client."""
 
 import hashlib
 import hmac

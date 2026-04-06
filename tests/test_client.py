@@ -19,6 +19,12 @@ from billionverify import (
 )
 
 
+# Helper to build a standard API wrapper response
+def api_response(data):
+    """Build a standard API wrapper response."""
+    return {"success": True, "code": "0", "message": "OK", "data": data}
+
+
 class TestBillionVerifyClient:
     """Tests for BillionVerify client."""
 
@@ -58,24 +64,22 @@ class TestBillionVerifyClient:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.is_success = True
-        mock_response.json.return_value = {
+        mock_response.json.return_value = api_response({
             "email": "test@example.com",
             "status": "valid",
-            "result": {
-                "deliverable": True,
-                "valid_format": True,
-                "valid_domain": True,
-                "valid_mx": True,
-                "disposable": False,
-                "role": False,
-                "catchall": False,
-                "free": False,
-                "smtp_valid": True,
-            },
             "score": 0.95,
-            "reason": None,
+            "is_deliverable": True,
+            "is_disposable": False,
+            "is_catchall": False,
+            "is_role": False,
+            "is_free": False,
+            "domain": "example.com",
+            "check_smtp": True,
+            "reason": "Valid email address",
+            "response_time": 150,
             "credits_used": 1,
-        }
+            "mx_records": ["mx.example.com"],
+        })
         mock_request.return_value = mock_response
 
         with BillionVerify(api_key="test-key") as client:
@@ -84,42 +88,40 @@ class TestBillionVerifyClient:
         assert result.email == "test@example.com"
         assert result.status == "valid"
         assert result.score == 0.95
-        assert result.result.deliverable is True
-        assert result.result.disposable is False
+        assert result.is_deliverable is True
+        assert result.is_disposable is False
+        assert result.check_smtp is True
+        assert result.domain == "example.com"
+        assert result.credits_used == 1
 
     @patch.object(httpx.Client, "request")
-    def test_verify_with_options(self, mock_request):
-        """Should verify email with custom options."""
+    def test_verify_with_domain_suggestion(self, mock_request):
+        """Should return domain suggestion when available."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.is_success = True
-        mock_response.json.return_value = {
-            "email": "test@example.com",
-            "status": "valid",
-            "result": {
-                "deliverable": True,
-                "valid_format": True,
-                "valid_domain": True,
-                "valid_mx": True,
-                "disposable": False,
-                "role": False,
-                "catchall": False,
-                "free": False,
-                "smtp_valid": True,
-            },
-            "score": 0.95,
-            "reason": None,
+        mock_response.json.return_value = api_response({
+            "email": "test@gmial.com",
+            "status": "invalid",
+            "score": 0.0,
+            "is_deliverable": False,
+            "is_disposable": False,
+            "is_catchall": False,
+            "is_role": False,
+            "is_free": False,
+            "domain": "gmial.com",
+            "check_smtp": False,
+            "reason": "no_mx_records",
+            "domain_suggestion": "gmail.com",
+            "response_time": 50,
             "credits_used": 1,
-        }
+        })
         mock_request.return_value = mock_response
 
         with BillionVerify(api_key="test-key") as client:
-            result = client.verify("test@example.com", smtp_check=False, timeout=5000)
+            result = client.verify("test@gmial.com")
 
-        mock_request.assert_called_once()
-        call_kwargs = mock_request.call_args[1]
-        assert call_kwargs["json"]["smtp_check"] is False
-        assert call_kwargs["json"]["timeout"] == 5000
+        assert result.domain_suggestion == "gmail.com"
 
     @patch.object(httpx.Client, "request")
     def test_verify_authentication_error(self, mock_request):
@@ -155,11 +157,11 @@ class TestBillionVerifyClient:
 
     @patch.object(httpx.Client, "request")
     def test_verify_insufficient_credits(self, mock_request):
-        """Should raise InsufficientCreditsError on 403."""
+        """Should raise InsufficientCreditsError on 402."""
         mock_response = MagicMock()
-        mock_response.status_code = 403
+        mock_response.status_code = 402
         mock_response.is_success = False
-        mock_response.reason_phrase = "Forbidden"
+        mock_response.reason_phrase = "Payment Required"
         mock_response.json.return_value = {
             "error": {"code": "INSUFFICIENT_CREDITS", "message": "Not enough credits"}
         }
@@ -187,94 +189,62 @@ class TestBillionVerifyClient:
 
     @patch.object(httpx.Client, "request")
     def test_verify_bulk_success(self, mock_request):
-        """Should submit bulk verification job successfully."""
+        """Should verify bulk emails successfully."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.is_success = True
-        mock_response.json.return_value = {
-            "job_id": "job_123",
-            "status": "processing",
-            "total": 3,
-            "processed": 0,
-            "valid": 0,
-            "invalid": 0,
-            "unknown": 0,
-            "credits_used": 3,
-            "created_at": "2025-01-15T10:30:00Z",
-        }
+        mock_response.json.return_value = api_response({
+            "results": [
+                {
+                    "email": "user1@example.com",
+                    "status": "valid",
+                    "score": 0.95,
+                    "is_deliverable": True,
+                    "is_disposable": False,
+                    "is_catchall": False,
+                    "is_role": False,
+                    "is_free": False,
+                    "domain": "example.com",
+                    "reason": "Valid email address",
+                },
+                {
+                    "email": "bad@invalid.com",
+                    "status": "invalid",
+                    "score": 0.0,
+                    "is_deliverable": False,
+                    "is_disposable": False,
+                    "is_catchall": False,
+                    "is_role": False,
+                    "is_free": False,
+                    "domain": "invalid.com",
+                    "reason": "no_mx_records",
+                },
+            ],
+            "total_emails": 2,
+            "valid_emails": 1,
+            "invalid_emails": 1,
+            "credits_used": 2,
+            "process_time": 500,
+        })
         mock_request.return_value = mock_response
 
         with BillionVerify(api_key="test-key") as client:
-            result = client.verify_bulk(
-                ["user1@example.com", "user2@example.com", "user3@example.com"]
-            )
+            result = client.verify_bulk(["user1@example.com", "bad@invalid.com"])
 
-        assert result.job_id == "job_123"
-        assert result.status == "processing"
-        assert result.total == 3
+        assert result.total_emails == 2
+        assert result.valid_emails == 1
+        assert result.invalid_emails == 1
+        assert len(result.results) == 2
+        assert result.results[0].email == "user1@example.com"
+        assert result.results[0].status == "valid"
 
     def test_verify_bulk_too_many_emails(self):
-        """Should raise ValidationError when emails exceed 10000."""
-        emails = ["test@example.com"] * 10001
+        """Should raise ValidationError when emails exceed 50."""
+        emails = ["test@example.com"] * 51
 
         with BillionVerify(api_key="test-key") as client:
             with pytest.raises(ValidationError):
                 client.verify_bulk(emails)
-
-    @patch.object(httpx.Client, "request")
-    def test_get_bulk_job_status(self, mock_request):
-        """Should get bulk job status successfully."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.is_success = True
-        mock_response.json.return_value = {
-            "job_id": "job_123",
-            "status": "processing",
-            "total": 100,
-            "processed": 50,
-            "valid": 40,
-            "invalid": 5,
-            "unknown": 5,
-            "credits_used": 100,
-            "created_at": "2025-01-15T10:30:00Z",
-            "progress_percent": 50,
-        }
-        mock_request.return_value = mock_response
-
-        with BillionVerify(api_key="test-key") as client:
-            result = client.get_bulk_job_status("job_123")
-
-        assert result.job_id == "job_123"
-        assert result.progress_percent == 50
-
-    @patch.object(httpx.Client, "request")
-    def test_get_bulk_job_results(self, mock_request):
-        """Should get bulk job results successfully."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.is_success = True
-        mock_response.json.return_value = {
-            "job_id": "job_123",
-            "total": 100,
-            "limit": 50,
-            "offset": 0,
-            "results": [
-                {
-                    "email": "test@example.com",
-                    "status": "valid",
-                    "result": {"deliverable": True},
-                    "score": 0.95,
-                }
-            ],
-        }
-        mock_request.return_value = mock_response
-
-        with BillionVerify(api_key="test-key") as client:
-            result = client.get_bulk_job_results("job_123", limit=50, offset=0)
-
-        assert result.job_id == "job_123"
-        assert len(result.results) == 1
-        assert result.results[0].email == "test@example.com"
 
     @patch.object(httpx.Client, "request")
     def test_get_credits(self, mock_request):
@@ -282,22 +252,51 @@ class TestBillionVerifyClient:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.is_success = True
-        mock_response.json.return_value = {
-            "available": 9500,
-            "used": 500,
-            "total": 10000,
-            "plan": "Professional",
-            "resets_at": "2025-02-01T00:00:00Z",
-            "rate_limit": {"requests_per_hour": 10000, "remaining": 9850},
-        }
+        mock_response.json.return_value = api_response({
+            "account_id": "acc_123",
+            "api_key_id": "key_123",
+            "api_key_name": "Test Key",
+            "credits_balance": 9500,
+            "credits_consumed": 500,
+            "credits_added": 10000,
+            "last_updated": "2025-01-15T10:30:00Z",
+        })
         mock_request.return_value = mock_response
 
         with BillionVerify(api_key="test-key") as client:
             result = client.get_credits()
 
-        assert result.available == 9500
-        assert result.plan == "Professional"
-        assert result.rate_limit.remaining == 9850
+        assert result.credits_balance == 9500
+        assert result.credits_consumed == 500
+        assert result.api_key_name == "Test Key"
+
+    @patch.object(httpx.Client, "request")
+    def test_get_file_task_status(self, mock_request):
+        """Should get file task status successfully."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.is_success = True
+        mock_response.json.return_value = api_response({
+            "task_id": "task_123",
+            "status": "processing",
+            "progress": 50,
+            "total_emails": 100,
+            "processed_emails": 50,
+            "valid_emails": 40,
+            "invalid_emails": 5,
+            "unknown_emails": 5,
+            "credits_used": 50,
+        })
+        mock_request.return_value = mock_response
+
+        with BillionVerify(api_key="test-key") as client:
+            result = client.get_file_task_status("task_123")
+
+        assert result.task_id == "task_123"
+        assert result.status == "processing"
+        assert result.progress == 50
+        assert result.total_emails == 100
+        assert result.processed_emails == 50
 
     @patch.object(httpx.Client, "request")
     def test_create_webhook(self, mock_request):
@@ -305,22 +304,27 @@ class TestBillionVerifyClient:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.is_success = True
-        mock_response.json.return_value = {
+        mock_response.json.return_value = api_response({
             "id": "webhook_123",
             "url": "https://example.com/webhook",
-            "events": ["verification.completed"],
+            "events": ["file.completed", "file.failed"],
+            "secret": "whsec_test123",
+            "is_active": True,
             "created_at": "2025-01-15T10:30:00Z",
-        }
+            "updated_at": "2025-01-15T10:30:00Z",
+        })
         mock_request.return_value = mock_response
 
         with BillionVerify(api_key="test-key") as client:
             result = client.create_webhook(
                 url="https://example.com/webhook",
-                events=["verification.completed"],
+                events=["file.completed", "file.failed"],
             )
 
         assert result.id == "webhook_123"
         assert result.url == "https://example.com/webhook"
+        assert result.secret == "whsec_test123"
+        assert result.is_active is True
 
     @patch.object(httpx.Client, "request")
     def test_list_webhooks(self, mock_request):
@@ -328,14 +332,17 @@ class TestBillionVerifyClient:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.is_success = True
-        mock_response.json.return_value = [
+        mock_response.json.return_value = api_response([
             {
                 "id": "webhook_123",
                 "url": "https://example.com/webhook",
-                "events": ["verification.completed"],
+                "events": ["file.completed"],
+                "secret": None,
+                "is_active": True,
                 "created_at": "2025-01-15T10:30:00Z",
+                "updated_at": "2025-01-15T10:30:00Z",
             }
-        ]
+        ])
         mock_request.return_value = mock_response
 
         with BillionVerify(api_key="test-key") as client:
@@ -405,7 +412,7 @@ class TestExceptions:
         """Should create InsufficientCreditsError correctly."""
         error = InsufficientCreditsError()
         assert error.code == "INSUFFICIENT_CREDITS"
-        assert error.status_code == 403
+        assert error.status_code == 402
 
     def test_not_found_error(self):
         """Should create NotFoundError correctly."""
@@ -435,24 +442,21 @@ class TestAsyncBillionVerifyClient:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.is_success = True
-        mock_response.json.return_value = {
+        mock_response.json.return_value = api_response({
             "email": "test@example.com",
             "status": "valid",
-            "result": {
-                "deliverable": True,
-                "valid_format": True,
-                "valid_domain": True,
-                "valid_mx": True,
-                "disposable": False,
-                "role": False,
-                "catchall": False,
-                "free": False,
-                "smtp_valid": True,
-            },
             "score": 0.95,
-            "reason": None,
+            "is_deliverable": True,
+            "is_disposable": False,
+            "is_catchall": False,
+            "is_role": False,
+            "is_free": False,
+            "domain": "example.com",
+            "check_smtp": True,
+            "reason": "Valid email address",
+            "response_time": 150,
             "credits_used": 1,
-        }
+        })
         mock_request.return_value = mock_response
 
         async with AsyncBillionVerify(api_key="test-key") as client:
@@ -460,3 +464,4 @@ class TestAsyncBillionVerifyClient:
 
         assert result.email == "test@example.com"
         assert result.status == "valid"
+        assert result.check_smtp is True

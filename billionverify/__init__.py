@@ -1,4 +1,4 @@
-"""BillionVerify Python SDK for email verification."""
+"""BillionVerify Python SDK - Official SDK for BillionVerify email verification API."""
 
 from .client import AsyncBillionVerify, BillionVerify
 from .exceptions import (

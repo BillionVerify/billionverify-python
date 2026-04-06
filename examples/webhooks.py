@@ -1,4 +1,4 @@
-"""Webhooks example for BillionVerify SDK.
+"""Webhooks example for BillionVerify Python SDK.
 
 This example demonstrates:
 - Creating webhooks (events: file.completed, file.failed)
@@ -118,7 +118,7 @@ def verify_webhook_signature_example():
     webhook_payload = {
         "event": "file.completed",
         "data": {
-            "job_id": "job_abc123xyz",
+            "task_id": "task_abc123xyz",
             "status": "completed",
             "total": 100,
             "valid": 85,
@@ -174,7 +174,7 @@ WEBHOOK_SECRET = "your-webhook-secret"
 @app.route("/webhooks/billionverify", methods=["POST"])
 def handle_webhook():
     # Get the signature from the header
-    signature = request.headers.get("X-EV-Signature")
+    signature = request.headers.get("X-BV-Signature")
     if not signature:
         return jsonify({"error": "Missing signature"}), 401
 
@@ -228,7 +228,7 @@ WEBHOOK_SECRET = "your-webhook-secret"
 @app.post("/webhooks/billionverify")
 async def handle_webhook(request: Request):
     # Get the signature from the header
-    signature = request.headers.get("X-EV-Signature")
+    signature = request.headers.get("X-BV-Signature")
     if not signature:
         raise HTTPException(status_code=401, detail="Missing signature")
 
@@ -274,7 +274,7 @@ def webhook_payload_examples():
     file_completed_payload = {
         "event": "file.completed",
         "data": {
-            "job_id": "job_abc123xyz",
+            "task_id": "task_abc123xyz",
             "status": "completed",
             "total": 1000,
             "processed": 1000,
@@ -295,7 +295,7 @@ def webhook_payload_examples():
     file_failed_payload = {
         "event": "file.failed",
         "data": {
-            "job_id": "job_def456uvw",
+            "task_id": "task_def456uvw",
             "status": "failed",
             "error": "Invalid file format",
             "filename": "invalid.txt",

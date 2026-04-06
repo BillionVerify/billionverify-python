@@ -1,4 +1,4 @@
-"""Async example for BillionVerify SDK.
+"""Async example for BillionVerify Python SDK.
 
 This example demonstrates async/await usage with the AsyncBillionVerify client:
 - Async single email verification
@@ -48,6 +48,7 @@ async def single_verification_example():
             print(f"Role: {result.is_role}")
             print(f"Domain: {result.domain}")
             print(f"Reason: {result.reason}")
+            print(f"SMTP Check: {result.check_smtp}")
 
         except AuthenticationError:
             print("Error: Invalid API key")
@@ -148,35 +149,33 @@ test@gmail.com
         try:
             # Upload the file
             print("Uploading file...")
-            job = await client.upload_file(
+            task = await client.upload_file(
                 file_path=csv_path,
                 check_smtp=True,
                 email_column="email",
             )
-            print(f"Job ID: {job.job_id}")
-            print(f"Status: {job.status}")
+            print(f"Task ID: {task.task_id}")
+            print(f"Status: {task.status}")
+            print(f"Estimated count: {task.estimated_count}")
 
             # Wait for completion
             print("\nWaiting for completion...")
-            completed = await client.wait_for_file_job(
-                job_id=job.job_id,
+            completed = await client.wait_for_file_task(
+                task_id=task.task_id,
                 poll_interval=2.0,
                 max_wait=300.0,
             )
             print(f"Final status: {completed.status}")
-            print(f"Valid: {completed.valid}")
-            print(f"Invalid: {completed.invalid}")
+            print(f"Valid: {completed.valid_emails}")
+            print(f"Invalid: {completed.invalid_emails}")
 
-            # Get results
+            # Download results as CSV
             if completed.status == "completed":
-                results = await client.get_file_job_results(
-                    job_id=job.job_id,
-                    limit=100,
+                output = await client.download_file_results(
+                    task_id=task.task_id,
+                    output_path="async_results.csv",
                 )
-
-                print("\nResults:")
-                for item in results.results:
-                    print(f"  {item.email}: {item.status}")
+                print(f"\nResults saved to: {output}")
 
         except TimeoutError as e:
             print(f"Timeout: {e}")

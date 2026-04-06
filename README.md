@@ -1,6 +1,6 @@
-# billionverify
+# BillionVerify Python SDK
 
-Official BillionVerify Python SDK for email verification.
+Official Python SDK for the BillionVerify email verification API.
 
 **Documentation:** https://billionverify.com/docs
 
