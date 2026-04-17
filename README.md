@@ -2,6 +2,10 @@
 
 Official Python SDK for the BillionVerify email verification API.
 
+[![PyPI version](https://img.shields.io/pypi/v/billionverify.svg)](https://pypi.org/project/billionverify/)
+[![Python Versions](https://img.shields.io/pypi/pyversions/billionverify.svg)](https://pypi.org/project/billionverify/)
+
+**PyPI:** https://pypi.org/project/billionverify/
 **Documentation:** https://billionverify.com/docs
 
 ## Installation
