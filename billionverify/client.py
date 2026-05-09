@@ -574,6 +574,25 @@ class BillionVerify:
 
         raise TimeoutError(f"File task {task_id} did not complete within {max_wait}s")
 
+    def get_bulk_task_status(self, task_id: str, timeout: int = 0) -> "BulkTaskStatus":
+        """Poll a bulk async task. Backend reuses /verify/file/:task_id."""
+        from .types import BulkTaskStatus
+
+        params: Dict[str, Any] = {}
+        if timeout > 0:
+            if timeout > 300:
+                raise ValidationError("Timeout must be between 0 and 300 seconds")
+            params["timeout"] = timeout
+        custom_timeout = self.timeout + timeout if timeout > 0 else None
+        data = self._request(
+            "GET", f"/verify/file/{task_id}",
+            params=params if params else None,
+            custom_timeout=custom_timeout,
+        )
+        valid_fields = set(BulkTaskStatus.__dataclass_fields__.keys())
+        kwargs = {k: v for k, v in data.items() if k in valid_fields}
+        return BulkTaskStatus(**kwargs)
+
     def get_credits(self) -> CreditsResponse:
         """Get current credit balance.
 
@@ -1142,6 +1161,25 @@ class AsyncBillionVerify:
             await asyncio.sleep(poll_interval)
 
         raise TimeoutError(f"File task {task_id} did not complete within {max_wait}s")
+
+    async def get_bulk_task_status(self, task_id: str, timeout: int = 0) -> "BulkTaskStatus":
+        """Poll a bulk async task. Backend reuses /verify/file/:task_id."""
+        from .types import BulkTaskStatus
+
+        params: Dict[str, Any] = {}
+        if timeout > 0:
+            if timeout > 300:
+                raise ValidationError("Timeout must be between 0 and 300 seconds")
+            params["timeout"] = timeout
+        custom_timeout = self.timeout + timeout if timeout > 0 else None
+        data = await self._request(
+            "GET", f"/verify/file/{task_id}",
+            params=params if params else None,
+            custom_timeout=custom_timeout,
+        )
+        valid_fields = set(BulkTaskStatus.__dataclass_fields__.keys())
+        kwargs = {k: v for k, v in data.items() if k in valid_fields}
+        return BulkTaskStatus(**kwargs)
 
     async def get_credits(self) -> CreditsResponse:
         """Get current credit balance."""

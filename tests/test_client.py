@@ -640,6 +640,33 @@ class TestVerifyBulkAsync:
                 await c.verify_bulk_async([f"u{i}@example.com" for i in range(50)])
 
     @respx.mock
+    @pytest.mark.asyncio
+    async def test_get_bulk_task_status_completed(self):
+        from billionverify import AsyncBillionVerify
+        respx.get("https://api.billionverify.com/v1/verify/file/bulk_003").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "task_id": "bulk_003",
+                        "status": "completed",
+                        "progress": 100,
+                        "total_emails": 500,
+                        "processed_emails": 500,
+                        "valid_emails": 300,
+                        "invalid_emails": 100,
+                        "unknown_emails": 100,
+                        "credits_used": 500,
+                    }
+                },
+            )
+        )
+        async with AsyncBillionVerify(api_key="bv_live_test") as c:
+            s = await c.get_bulk_task_status("bulk_003")
+        assert s.status == "completed"
+        assert s.processed_emails == 500
+
+    @respx.mock
     def test_sync_verify_bulk_async_500_emails(self):
         from billionverify import BillionVerify
         emails = [f"u{i}@example.com" for i in range(500)]
