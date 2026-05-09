@@ -34,7 +34,7 @@ from .types import (
 DEFAULT_BASE_URL = "https://api.billionverify.com/v1"
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_RETRIES = 3
-SDK_VERSION = "1.1.0"
+SDK_VERSION = "1.2.0"
 
 
 def _parse_str_header(value: Any) -> Optional[str]:
