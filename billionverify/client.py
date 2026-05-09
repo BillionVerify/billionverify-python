@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -185,25 +185,6 @@ class BillionVerify:
             response, method, path, json, params, attempt, files, custom_timeout, skip_auth, return_metadata
         )
 
-    def _request_with_metadata(
-        self,
-        method: str,
-        path: str,
-        json: Optional[Dict[str, Any]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        custom_timeout: Optional[float] = None,
-    ) -> Tuple[Any, ResponseMetadata]:
-        """Make an HTTP request and return both API data and response metadata."""
-        data, metadata = self._request(
-            method,
-            path,
-            json=json,
-            params=params,
-            custom_timeout=custom_timeout,
-            return_metadata=True,
-        )
-        return data, metadata
-
     def _request_raw(
         self,
         method: str,
@@ -244,7 +225,7 @@ class BillionVerify:
         custom_timeout: Optional[float] = None,
         skip_auth: bool = False,
         return_metadata: bool = False,
-    ) -> None:
+    ) -> Any:
         """Handle error responses."""
         metadata = _response_metadata(response)
         try:
@@ -338,7 +319,7 @@ class BillionVerify:
             "include_domain_reputation": include_domain_reputation,
         }
 
-        data, metadata = self._request_with_metadata("POST", "/verify/single", json=payload)
+        data, metadata = self._request("POST", "/verify/single", json=payload, return_metadata=True)
 
         return VerificationResult(
             email=data["email"],
@@ -809,25 +790,6 @@ class AsyncBillionVerify:
             response, method, path, json, params, attempt, files, custom_timeout, skip_auth, return_metadata
         )
 
-    async def _request_with_metadata(
-        self,
-        method: str,
-        path: str,
-        json: Optional[Dict[str, Any]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        custom_timeout: Optional[float] = None,
-    ) -> Tuple[Any, ResponseMetadata]:
-        """Make an async HTTP request and return both API data and response metadata."""
-        data, metadata = await self._request(
-            method,
-            path,
-            json=json,
-            params=params,
-            custom_timeout=custom_timeout,
-            return_metadata=True,
-        )
-        return data, metadata
-
     async def _request_raw(
         self,
         method: str,
@@ -867,7 +829,7 @@ class AsyncBillionVerify:
         custom_timeout: Optional[float] = None,
         skip_auth: bool = False,
         return_metadata: bool = False,
-    ) -> None:
+    ) -> Any:
         """Handle error responses."""
         import asyncio
 
@@ -949,7 +911,7 @@ class AsyncBillionVerify:
             "include_domain_reputation": include_domain_reputation,
         }
 
-        data, metadata = await self._request_with_metadata("POST", "/verify/single", json=payload)
+        data, metadata = await self._request("POST", "/verify/single", json=payload, return_metadata=True)
 
         return VerificationResult(
             email=data["email"],
