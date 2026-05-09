@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+import respx
 
 from billionverify import (
     AsyncBillionVerify,
@@ -592,3 +593,48 @@ class TestAsyncBillionVerifyClient:
         _, kwargs = mock_request.call_args
         assert kwargs["json"]["force_refresh"] is False
         assert kwargs["json"]["include_domain_reputation"] is False
+
+
+class TestVerifyBulkAsync:
+    """Tests for verify_bulk_async on both sync and async clients."""
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_verify_bulk_async_500_emails_returns_task(self):
+        from billionverify import AsyncBillionVerify
+        emails = [f"u{i}@example.com" for i in range(500)]
+        route = respx.post("https://api.billionverify.com/v1/verify/bulk").mock(
+            return_value=httpx.Response(
+                202,
+                json={
+                    "data": {
+                        "task_id": "bulk_001",
+                        "status": "processing",
+                        "message": "queued",
+                        "status_url": "/verify/file/bulk_001",
+                        "created_at": "2026-05-09T00:00:00Z",
+                        "estimated_count": 500,
+                        "unique_emails": 500,
+                    }
+                },
+            )
+        )
+        async with AsyncBillionVerify(api_key="bv_live_test") as c:
+            resp = await c.verify_bulk_async(emails, check_smtp=True)
+        assert route.called
+        assert resp.task_id == "bulk_001"
+        assert resp.estimated_count == 500
+
+    @pytest.mark.asyncio
+    async def test_verify_bulk_async_rejects_more_than_1000(self):
+        from billionverify import AsyncBillionVerify, ValidationError
+        async with AsyncBillionVerify(api_key="bv_live_test") as c:
+            with pytest.raises(ValidationError):
+                await c.verify_bulk_async([f"u{i}@example.com" for i in range(1001)])
+
+    @pytest.mark.asyncio
+    async def test_verify_bulk_async_rejects_less_than_51(self):
+        from billionverify import AsyncBillionVerify, ValidationError
+        async with AsyncBillionVerify(api_key="bv_live_test") as c:
+            with pytest.raises(ValidationError):
+                await c.verify_bulk_async([f"u{i}@example.com" for i in range(50)])
