@@ -543,6 +543,33 @@ class BillionVerify:
         out.write_bytes(response.content)
         return str(out)
 
+    def download_bulk_results(
+        self,
+        task_id: str,
+        output_path: str,
+        valid: Optional[bool] = None,
+        invalid: Optional[bool] = None,
+        catchall: Optional[bool] = None,
+        role: Optional[bool] = None,
+        unknown: Optional[bool] = None,
+        disposable: Optional[bool] = None,
+        risky: Optional[bool] = None,
+    ) -> str:
+        """Download bulk async results CSV. Backend reuses /verify/file/:task_id/results."""
+        params: Dict[str, Any] = {}
+        for name, val in (("valid", valid), ("invalid", invalid), ("catchall", catchall),
+                          ("role", role), ("unknown", unknown), ("disposable", disposable),
+                          ("risky", risky)):
+            if val is not None:
+                params[name] = str(val).lower()
+        response = self._request_raw(
+            "GET", f"/verify/file/{task_id}/results",
+            params=params if params else None,
+        )
+        out = Path(output_path)
+        out.write_bytes(response.content)
+        return str(out)
+
     def wait_for_file_task(
         self,
         task_id: str,
@@ -1137,6 +1164,33 @@ class AsyncBillionVerify:
 
         response = await self._request_raw("GET", f"/verify/file/{task_id}/results", params=params if params else None)
 
+        out = Path(output_path)
+        out.write_bytes(response.content)
+        return str(out)
+
+    async def download_bulk_results(
+        self,
+        task_id: str,
+        output_path: str,
+        valid: Optional[bool] = None,
+        invalid: Optional[bool] = None,
+        catchall: Optional[bool] = None,
+        role: Optional[bool] = None,
+        unknown: Optional[bool] = None,
+        disposable: Optional[bool] = None,
+        risky: Optional[bool] = None,
+    ) -> str:
+        """Download bulk async results CSV. Backend reuses /verify/file/:task_id/results."""
+        params: Dict[str, Any] = {}
+        for name, val in (("valid", valid), ("invalid", invalid), ("catchall", catchall),
+                          ("role", role), ("unknown", unknown), ("disposable", disposable),
+                          ("risky", risky)):
+            if val is not None:
+                params[name] = str(val).lower()
+        response = await self._request_raw(
+            "GET", f"/verify/file/{task_id}/results",
+            params=params if params else None,
+        )
         out = Path(output_path)
         out.write_bytes(response.content)
         return str(out)

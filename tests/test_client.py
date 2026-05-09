@@ -667,6 +667,20 @@ class TestVerifyBulkAsync:
         assert s.processed_emails == 500
 
     @respx.mock
+    @pytest.mark.asyncio
+    async def test_download_bulk_results_writes_csv(self, tmp_path):
+        from billionverify import AsyncBillionVerify
+        csv_body = b"email,status,reason\nu0@example.com,valid,smtp_deliverable\n"
+        respx.get("https://api.billionverify.com/v1/verify/file/bulk_004/results").mock(
+            return_value=httpx.Response(200, content=csv_body, headers={"Content-Type": "text/csv"}),
+        )
+        out = tmp_path / "results.csv"
+        async with AsyncBillionVerify(api_key="bv_live_test") as c:
+            path = await c.download_bulk_results("bulk_004", str(out))
+        assert path == str(out)
+        assert out.read_bytes() == csv_body
+
+    @respx.mock
     def test_sync_verify_bulk_async_500_emails(self):
         from billionverify import BillionVerify
         emails = [f"u{i}@example.com" for i in range(500)]
