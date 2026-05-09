@@ -10,6 +10,18 @@ WebhookEvent = Literal["file.completed", "file.failed"]
 
 
 @dataclass
+class ResponseMetadata:
+    """HTTP response metadata useful for audit logs and rate-limit handling."""
+
+    status_code: int
+    request_id: Optional[str] = None
+    rate_limit_limit: Optional[int] = None
+    rate_limit_remaining: Optional[int] = None
+    rate_limit_reset: Optional[int] = None
+    retry_after: Optional[int] = None
+
+
+@dataclass
 class DomainReputation:
     """Domain reputation details."""
 
@@ -44,6 +56,7 @@ class VerificationResult:
     gravatar_url: Optional[str] = None
     smtp_response: Optional[str] = None
     error_message: Optional[str] = None
+    response_metadata: Optional[ResponseMetadata] = None
 
 
 @dataclass

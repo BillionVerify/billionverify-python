@@ -19,6 +19,7 @@ from .types import (
     FileUploadResponse,
     HealthCheckResponse,
     JobStatus,
+    ResponseMetadata,
     VerificationResult,
     VerificationStatus,
     Webhook,
@@ -34,6 +35,7 @@ __all__ = [
     # Types
     "VerificationResult",
     "VerificationStatus",
+    "ResponseMetadata",
     "BulkVerificationResult",
     "BulkVerifyResponse",
     "FileUploadResponse",

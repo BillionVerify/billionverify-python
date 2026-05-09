@@ -46,6 +46,8 @@ Uses the `/verify/single` endpoint:
 result = client.verify(
     email="user@example.com",
     check_smtp=True,  # Optional: Perform SMTP verification (default: True)
+    force_refresh=False,  # Optional: Bypass cache and force live verification (default: False)
+    include_domain_reputation=False,  # Optional: Include domain reputation details (default: False)
 )
 
 # Flat response structure
@@ -62,6 +64,10 @@ print(result.reason)             # 'Valid email address'
 print(result.check_smtp)         # True (whether SMTP was performed)
 print(result.domain_suggestion)  # None or suggested domain correction
 print(result.credits_used)       # 1
+
+# Response metadata for audit logs and throttled runners
+print(result.response_metadata.request_id)             # Server X-Request-ID
+print(result.response_metadata.rate_limit_remaining)   # Remaining requests in current window
 ```
 
 ## Bulk Email Verification (Synchronous)
@@ -227,6 +233,7 @@ except AuthenticationError:
     print("Invalid API key")
 except RateLimitError as e:
     print(f"Rate limited. Retry after {e.retry_after} seconds")
+    print(f"Request ID: {e.response_metadata.request_id}")
 except ValidationError as e:
     print(f"Invalid input: {e.message}")
 except InsufficientCreditsError:

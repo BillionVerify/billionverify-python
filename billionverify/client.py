@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -25,8 +25,8 @@ from .types import (
     FileTaskStatus,
     FileUploadResponse,
     HealthCheckResponse,
+    ResponseMetadata,
     VerificationResult,
-    VerificationStatus,
     Webhook,
     WebhookEvent,
 )
@@ -35,6 +35,34 @@ DEFAULT_BASE_URL = "https://api.billionverify.com/v1"
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_RETRIES = 3
 SDK_VERSION = "1.1.0"
+
+
+def _parse_str_header(value: Any) -> Optional[str]:
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _parse_int_header(value: Any) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    if not isinstance(value, (str, int)):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _response_metadata(response: httpx.Response) -> ResponseMetadata:
+    return ResponseMetadata(
+        status_code=response.status_code,
+        request_id=_parse_str_header(response.headers.get("X-Request-ID")),
+        rate_limit_limit=_parse_int_header(response.headers.get("X-RateLimit-Limit")),
+        rate_limit_remaining=_parse_int_header(response.headers.get("X-RateLimit-Remaining")),
+        rate_limit_reset=_parse_int_header(response.headers.get("X-RateLimit-Reset")),
+        retry_after=_parse_int_header(response.headers.get("Retry-After")),
+    )
 
 
 class BillionVerify:
@@ -92,6 +120,7 @@ class BillionVerify:
         files: Optional[Dict[str, Any]] = None,
         custom_timeout: Optional[float] = None,
         skip_auth: bool = False,
+        return_metadata: bool = False,
     ) -> Any:
         """Make an HTTP request to the API."""
         try:
@@ -139,16 +168,41 @@ class BillionVerify:
             raise BillionVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0)
 
         if response.status_code == 204:
-            return None
+            metadata = _response_metadata(response)
+            return (None, metadata) if return_metadata else None
 
         if response.is_success:
+            metadata = _response_metadata(response)
             result = response.json()
             # Extract data from API wrapper response {success, code, message, data}
             if isinstance(result, dict) and "data" in result:
-                return result["data"]
-            return result
+                data = result["data"]
+            else:
+                data = result
+            return (data, metadata) if return_metadata else data
 
-        self._handle_error(response, method, path, json, params, attempt, files, custom_timeout, skip_auth)
+        return self._handle_error(
+            response, method, path, json, params, attempt, files, custom_timeout, skip_auth, return_metadata
+        )
+
+    def _request_with_metadata(
+        self,
+        method: str,
+        path: str,
+        json: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+        custom_timeout: Optional[float] = None,
+    ) -> Tuple[Any, ResponseMetadata]:
+        """Make an HTTP request and return both API data and response metadata."""
+        data, metadata = self._request(
+            method,
+            path,
+            json=json,
+            params=params,
+            custom_timeout=custom_timeout,
+            return_metadata=True,
+        )
+        return data, metadata
 
     def _request_raw(
         self,
@@ -189,8 +243,10 @@ class BillionVerify:
         files: Optional[Dict[str, Any]] = None,
         custom_timeout: Optional[float] = None,
         skip_auth: bool = False,
+        return_metadata: bool = False,
     ) -> None:
         """Handle error responses."""
+        metadata = _response_metadata(response)
         try:
             data = response.json()
             error = data.get("error", {})
@@ -205,30 +261,34 @@ class BillionVerify:
         status = response.status_code
 
         if status == 401:
-            raise AuthenticationError(message)
+            raise AuthenticationError(message, response_metadata=metadata)
 
         if status == 402:
-            raise InsufficientCreditsError(message)
+            raise InsufficientCreditsError(message, response_metadata=metadata)
 
         if status == 404:
-            raise NotFoundError(message)
+            raise NotFoundError(message, response_metadata=metadata)
 
         if status == 429:
-            retry_after = int(response.headers.get("Retry-After", "0"))
+            retry_after = metadata.retry_after or 0
             if attempt < self.retries:
                 time.sleep(retry_after or (2**attempt))
-                return self._request(method, path, json, params, attempt + 1, files, custom_timeout, skip_auth)
-            raise RateLimitError(message, retry_after)
+                return self._request(
+                    method, path, json, params, attempt + 1, files, custom_timeout, skip_auth, return_metadata
+                )
+            raise RateLimitError(message, retry_after, response_metadata=metadata)
 
         if status == 400:
-            raise ValidationError(message, details)
+            raise ValidationError(message, details, response_metadata=metadata)
 
         if status in (500, 502, 503):
             if attempt < self.retries:
                 time.sleep(2**attempt)
-                return self._request(method, path, json, params, attempt + 1, files, custom_timeout, skip_auth)
+                return self._request(
+                    method, path, json, params, attempt + 1, files, custom_timeout, skip_auth, return_metadata
+                )
 
-        raise BillionVerifyError(message, code, status, details)
+        raise BillionVerifyError(message, code, status, details, response_metadata=metadata)
 
     def health_check(self) -> HealthCheckResponse:
         """Check API health status (no authentication required).
@@ -257,19 +317,28 @@ class BillionVerify:
         self,
         email: str,
         check_smtp: bool = True,
+        force_refresh: bool = False,
+        include_domain_reputation: bool = False,
     ) -> VerificationResult:
         """Verify a single email address.
 
         Args:
             email: The email address to verify.
             check_smtp: Whether to perform SMTP verification (default: True).
+            force_refresh: Whether to bypass cached results and force live verification (default: False).
+            include_domain_reputation: Whether to include domain reputation details (default: False).
 
         Returns:
             VerificationResult with verification results.
         """
-        payload: Dict[str, Any] = {"email": email, "check_smtp": check_smtp}
+        payload: Dict[str, Any] = {
+            "email": email,
+            "check_smtp": check_smtp,
+            "force_refresh": force_refresh,
+            "include_domain_reputation": include_domain_reputation,
+        }
 
-        data = self._request("POST", "/verify/single", json=payload)
+        data, metadata = self._request_with_metadata("POST", "/verify/single", json=payload)
 
         return VerificationResult(
             email=data["email"],
@@ -293,6 +362,7 @@ class BillionVerify:
             gravatar_url=data.get("gravatar_url"),
             smtp_response=data.get("smtp_response"),
             error_message=data.get("error_message"),
+            response_metadata=metadata,
         )
 
     def verify_bulk(
@@ -672,10 +742,9 @@ class AsyncBillionVerify:
         files: Optional[Dict[str, Any]] = None,
         custom_timeout: Optional[float] = None,
         skip_auth: bool = False,
+        return_metadata: bool = False,
     ) -> Any:
         """Make an async HTTP request to the API."""
-        import asyncio
-
         try:
             headers = {}
             if skip_auth:
@@ -723,16 +792,41 @@ class AsyncBillionVerify:
             raise BillionVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0)
 
         if response.status_code == 204:
-            return None
+            metadata = _response_metadata(response)
+            return (None, metadata) if return_metadata else None
 
         if response.is_success:
+            metadata = _response_metadata(response)
             result = response.json()
             # Extract data from API wrapper response {success, code, message, data}
             if isinstance(result, dict) and "data" in result:
-                return result["data"]
-            return result
+                data = result["data"]
+            else:
+                data = result
+            return (data, metadata) if return_metadata else data
 
-        await self._handle_error(response, method, path, json, params, attempt, files, custom_timeout, skip_auth)
+        return await self._handle_error(
+            response, method, path, json, params, attempt, files, custom_timeout, skip_auth, return_metadata
+        )
+
+    async def _request_with_metadata(
+        self,
+        method: str,
+        path: str,
+        json: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+        custom_timeout: Optional[float] = None,
+    ) -> Tuple[Any, ResponseMetadata]:
+        """Make an async HTTP request and return both API data and response metadata."""
+        data, metadata = await self._request(
+            method,
+            path,
+            json=json,
+            params=params,
+            custom_timeout=custom_timeout,
+            return_metadata=True,
+        )
+        return data, metadata
 
     async def _request_raw(
         self,
@@ -772,10 +866,12 @@ class AsyncBillionVerify:
         files: Optional[Dict[str, Any]] = None,
         custom_timeout: Optional[float] = None,
         skip_auth: bool = False,
+        return_metadata: bool = False,
     ) -> None:
         """Handle error responses."""
         import asyncio
 
+        metadata = _response_metadata(response)
         try:
             data = response.json()
             error = data.get("error", {})
@@ -790,30 +886,34 @@ class AsyncBillionVerify:
         status = response.status_code
 
         if status == 401:
-            raise AuthenticationError(message)
+            raise AuthenticationError(message, response_metadata=metadata)
 
         if status == 402:
-            raise InsufficientCreditsError(message)
+            raise InsufficientCreditsError(message, response_metadata=metadata)
 
         if status == 404:
-            raise NotFoundError(message)
+            raise NotFoundError(message, response_metadata=metadata)
 
         if status == 429:
-            retry_after = int(response.headers.get("Retry-After", "0"))
+            retry_after = metadata.retry_after or 0
             if attempt < self.retries:
                 await asyncio.sleep(retry_after or (2**attempt))
-                return await self._request(method, path, json, params, attempt + 1, files, custom_timeout, skip_auth)
-            raise RateLimitError(message, retry_after)
+                return await self._request(
+                    method, path, json, params, attempt + 1, files, custom_timeout, skip_auth, return_metadata
+                )
+            raise RateLimitError(message, retry_after, response_metadata=metadata)
 
         if status == 400:
-            raise ValidationError(message, details)
+            raise ValidationError(message, details, response_metadata=metadata)
 
         if status in (500, 502, 503):
             if attempt < self.retries:
                 await asyncio.sleep(2**attempt)
-                return await self._request(method, path, json, params, attempt + 1, files, custom_timeout, skip_auth)
+                return await self._request(
+                    method, path, json, params, attempt + 1, files, custom_timeout, skip_auth, return_metadata
+                )
 
-        raise BillionVerifyError(message, code, status, details)
+        raise BillionVerifyError(message, code, status, details, response_metadata=metadata)
 
     async def health_check(self) -> HealthCheckResponse:
         """Check API health status (no authentication required)."""
@@ -838,11 +938,18 @@ class AsyncBillionVerify:
         self,
         email: str,
         check_smtp: bool = True,
+        force_refresh: bool = False,
+        include_domain_reputation: bool = False,
     ) -> VerificationResult:
         """Verify a single email address."""
-        payload: Dict[str, Any] = {"email": email, "check_smtp": check_smtp}
+        payload: Dict[str, Any] = {
+            "email": email,
+            "check_smtp": check_smtp,
+            "force_refresh": force_refresh,
+            "include_domain_reputation": include_domain_reputation,
+        }
 
-        data = await self._request("POST", "/verify/single", json=payload)
+        data, metadata = await self._request_with_metadata("POST", "/verify/single", json=payload)
 
         return VerificationResult(
             email=data["email"],
@@ -866,6 +973,7 @@ class AsyncBillionVerify:
             gravatar_url=data.get("gravatar_url"),
             smtp_response=data.get("smtp_response"),
             error_message=data.get("error_message"),
+            response_metadata=metadata,
         )
 
     async def verify_bulk(

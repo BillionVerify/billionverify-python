@@ -64,6 +64,12 @@ class TestBillionVerifyClient:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.is_success = True
+        mock_response.headers = {
+            "X-Request-ID": "req-123",
+            "X-RateLimit-Limit": "6000",
+            "X-RateLimit-Remaining": "5999",
+            "X-RateLimit-Reset": "1778100000",
+        }
         mock_response.json.return_value = api_response({
             "email": "test@example.com",
             "status": "valid",
@@ -93,6 +99,49 @@ class TestBillionVerifyClient:
         assert result.check_smtp is True
         assert result.domain == "example.com"
         assert result.credits_used == 1
+        assert result.response_metadata is not None
+        assert result.response_metadata.request_id == "req-123"
+        assert result.response_metadata.rate_limit_limit == 6000
+        assert result.response_metadata.rate_limit_remaining == 5999
+        _, kwargs = mock_request.call_args
+        assert kwargs["json"]["force_refresh"] is False
+        assert kwargs["json"]["include_domain_reputation"] is False
+
+    @patch.object(httpx.Client, "request")
+    def test_verify_sends_force_refresh_options(self, mock_request):
+        """Should send cache and reputation options to single verification."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.is_success = True
+        mock_response.headers = {}
+        mock_response.json.return_value = api_response({
+            "email": "test@example.com",
+            "status": "valid",
+            "score": 0.95,
+            "is_deliverable": True,
+            "is_disposable": False,
+            "is_catchall": False,
+            "is_role": False,
+            "is_free": False,
+            "domain": "example.com",
+            "check_smtp": True,
+            "reason": "Valid email address",
+            "response_time": 150,
+            "credits_used": 1,
+        })
+        mock_request.return_value = mock_response
+
+        with BillionVerify(api_key="test-key") as client:
+            client.verify(
+                "test@example.com",
+                check_smtp=True,
+                force_refresh=True,
+                include_domain_reputation=True,
+            )
+
+        _, kwargs = mock_request.call_args
+        assert kwargs["json"]["force_refresh"] is True
+        assert kwargs["json"]["include_domain_reputation"] is True
 
     @patch.object(httpx.Client, "request")
     def test_verify_with_domain_suggestion(self, mock_request):
@@ -100,6 +149,10 @@ class TestBillionVerifyClient:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.is_success = True
+        mock_response.headers = {
+            "X-Request-ID": "req-async-123",
+            "X-RateLimit-Limit": "6000",
+        }
         mock_response.json.return_value = api_response({
             "email": "test@gmial.com",
             "status": "invalid",
@@ -188,11 +241,43 @@ class TestBillionVerifyClient:
                 client.verify("test@example.com")
 
     @patch.object(httpx.Client, "request")
+    def test_rate_limit_error_includes_response_metadata(self, mock_request):
+        """Should expose request and retry metadata on 429 errors."""
+        mock_response = MagicMock()
+        mock_response.status_code = 429
+        mock_response.is_success = False
+        mock_response.reason_phrase = "Too Many Requests"
+        mock_response.headers = {
+            "Retry-After": "60",
+            "X-Request-ID": "req-429",
+            "X-RateLimit-Limit": "6000",
+            "X-RateLimit-Remaining": "0",
+        }
+        mock_response.json.return_value = {
+            "error": {"code": "RATE_LIMIT_EXCEEDED", "message": "Too many requests"}
+        }
+        mock_request.return_value = mock_response
+
+        with BillionVerify(api_key="test-key", retries=1) as client:
+            with pytest.raises(RateLimitError) as exc_info:
+                client.verify("test@example.com")
+
+        error = exc_info.value
+        assert error.retry_after == 60
+        assert error.response_metadata is not None
+        assert error.response_metadata.request_id == "req-429"
+        assert error.response_metadata.retry_after == 60
+
+    @patch.object(httpx.Client, "request")
     def test_verify_bulk_success(self, mock_request):
         """Should verify bulk emails successfully."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.is_success = True
+        mock_response.headers = {
+            "X-Request-ID": "req-async-123",
+            "X-RateLimit-Limit": "6000",
+        }
         mock_response.json.return_value = api_response({
             "results": [
                 {
@@ -442,6 +527,10 @@ class TestAsyncBillionVerifyClient:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.is_success = True
+        mock_response.headers = {
+            "X-Request-ID": "req-async-123",
+            "X-RateLimit-Limit": "6000",
+        }
         mock_response.json.return_value = api_response({
             "email": "test@example.com",
             "status": "valid",
@@ -465,3 +554,8 @@ class TestAsyncBillionVerifyClient:
         assert result.email == "test@example.com"
         assert result.status == "valid"
         assert result.check_smtp is True
+        assert result.response_metadata is not None
+        assert result.response_metadata.request_id == "req-async-123"
+        _, kwargs = mock_request.call_args
+        assert kwargs["json"]["force_refresh"] is False
+        assert kwargs["json"]["include_domain_reputation"] is False
