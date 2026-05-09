@@ -702,3 +702,26 @@ class TestVerifyBulkAsync:
         with BillionVerify(api_key="bv_live_test") as c:
             resp = c.verify_bulk_async(emails)
         assert resp.task_id == "bulk_002"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_verify_bulk_async_accepts_51_emails(self):
+        from billionverify import AsyncBillionVerify
+        emails = [f"u{i}@example.com" for i in range(51)]
+        respx.post("https://api.billionverify.com/v1/verify/bulk").mock(
+            return_value=httpx.Response(
+                202,
+                json={"data": {
+                    "task_id": "bulk_b51",
+                    "status": "processing",
+                    "message": "queued",
+                    "status_url": "/verify/file/bulk_b51",
+                    "created_at": "2026-05-09T00:00:00Z",
+                    "estimated_count": 51,
+                }},
+            )
+        )
+        async with AsyncBillionVerify(api_key="bv_live_test") as c:
+            resp = await c.verify_bulk_async(emails)
+        assert resp.task_id == "bulk_b51"
+        assert resp.estimated_count == 51

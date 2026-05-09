@@ -618,7 +618,14 @@ class BillionVerify:
         )
         valid_fields = set(BulkTaskStatus.__dataclass_fields__.keys())
         kwargs = {k: v for k, v in data.items() if k in valid_fields}
-        return BulkTaskStatus(**kwargs)
+        try:
+            return BulkTaskStatus(**kwargs)
+        except TypeError as e:
+            raise BillionVerifyError(
+                f"bulk task status response missing required fields: {e}",
+                "INVALID_RESPONSE",
+                0,
+            ) from e
 
     def get_credits(self) -> CreditsResponse:
         """Get current credit balance.
@@ -1233,7 +1240,14 @@ class AsyncBillionVerify:
         )
         valid_fields = set(BulkTaskStatus.__dataclass_fields__.keys())
         kwargs = {k: v for k, v in data.items() if k in valid_fields}
-        return BulkTaskStatus(**kwargs)
+        try:
+            return BulkTaskStatus(**kwargs)
+        except TypeError as e:
+            raise BillionVerifyError(
+                f"bulk task status response missing required fields: {e}",
+                "INVALID_RESPONSE",
+                0,
+            ) from e
 
     async def get_credits(self) -> CreditsResponse:
         """Get current credit balance."""
