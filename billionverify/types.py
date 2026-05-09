@@ -138,6 +138,45 @@ class FileTaskStatus:
 
 
 @dataclass
+class BulkAsyncTaskResponse:
+    """Response from async bulk submission endpoint."""
+
+    task_id: str
+    status: str
+    message: str
+    status_url: str
+    created_at: str
+    estimated_count: int
+    unique_emails: Optional[int] = None
+    total_emails: Optional[int] = None
+
+
+@dataclass
+class BulkTaskStatus:
+    """Response from bulk async task status endpoint."""
+
+    task_id: str
+    status: str  # processing | completed | failed
+    progress: int = 0
+    total_emails: int = 0
+    processed_emails: int = 0
+    valid_emails: int = 0
+    invalid_emails: int = 0
+    unknown_emails: int = 0
+    catchall_emails: int = 0
+    role_emails: int = 0
+    disposable_emails: int = 0
+    risky_emails: int = 0
+    credits_used: int = 0
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    error_message: Optional[str] = None
+    download_url: Optional[str] = None
+    direct_download_url: Optional[str] = None
+    direct_download_expires_at: Optional[str] = None
+
+
+@dataclass
 class CreditsResponse:
     """Response from credits endpoint."""
 

@@ -11,6 +11,8 @@ from .exceptions import (
     ValidationError,
 )
 from .types import (
+    BulkAsyncTaskResponse,
+    BulkTaskStatus,
     BulkVerificationResult,
     BulkVerifyResponse,
     CreditsResponse,
@@ -38,6 +40,8 @@ __all__ = [
     "ResponseMetadata",
     "BulkVerificationResult",
     "BulkVerifyResponse",
+    "BulkAsyncTaskResponse",
+    "BulkTaskStatus",
     "FileUploadResponse",
     "FileTaskStatus",
     "CreditsResponse",

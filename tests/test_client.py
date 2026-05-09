@@ -512,6 +512,39 @@ class TestExceptions:
         assert error.message == "Request timed out after 30s"
 
 
+class TestBulkAsyncDataclasses:
+    """Tests for BulkAsyncTaskResponse and BulkTaskStatus dataclasses."""
+
+    def test_bulk_async_task_response_construction(self):
+        from billionverify import BulkAsyncTaskResponse
+        resp = BulkAsyncTaskResponse(
+            task_id="bulk_abc",
+            status="processing",
+            message="ok",
+            status_url="/verify/file/bulk_abc",
+            created_at="2026-05-09T00:00:00Z",
+            estimated_count=500,
+            unique_emails=500,
+        )
+        assert resp.task_id == "bulk_abc"
+        assert resp.estimated_count == 500
+
+    def test_bulk_task_status_construction(self):
+        from billionverify import BulkTaskStatus
+        s = BulkTaskStatus(
+            task_id="bulk_abc",
+            status="completed",
+            progress=100,
+            total_emails=500,
+            processed_emails=500,
+            valid_emails=300, invalid_emails=100, unknown_emails=100,
+            catchall_emails=0, role_emails=0, disposable_emails=0, risky_emails=0,
+            credits_used=500,
+        )
+        assert s.status == "completed"
+        assert s.processed_emails == 500
+
+
 @pytest.mark.asyncio
 class TestAsyncBillionVerifyClient:
     """Tests for async BillionVerify client."""
