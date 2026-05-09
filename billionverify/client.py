@@ -392,6 +392,33 @@ class BillionVerify:
             process_time=data["process_time"],
         )
 
+    def verify_bulk_async(
+        self,
+        emails: List[str],
+        check_smtp: bool = True,
+    ) -> "BulkAsyncTaskResponse":
+        """Sync counterpart to AsyncBillionVerify.verify_bulk_async."""
+        if len(emails) < 51:
+            raise ValidationError("verify_bulk_async requires at least 51 emails; use verify_bulk for ≤50")
+        if len(emails) > 1000:
+            raise ValidationError("verify_bulk_async accepts at most 1000 emails")
+
+        from .types import BulkAsyncTaskResponse
+
+        payload: Dict[str, Any] = {"emails": emails, "check_smtp": check_smtp}
+        data = self._request("POST", "/verify/bulk", json=payload)
+
+        return BulkAsyncTaskResponse(
+            task_id=data["task_id"],
+            status=data["status"],
+            message=data.get("message", ""),
+            status_url=data.get("status_url", f"/verify/file/{data['task_id']}"),
+            created_at=data.get("created_at", ""),
+            estimated_count=data.get("estimated_count", len(emails)),
+            unique_emails=data.get("unique_emails"),
+            total_emails=data.get("total_emails"),
+        )
+
     def upload_file(
         self,
         file_path: str,
