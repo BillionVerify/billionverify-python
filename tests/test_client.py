@@ -514,39 +514,6 @@ class TestExceptions:
         assert error.message == "Request timed out after 30s"
 
 
-class TestBulkAsyncDataclasses:
-    """Tests for BulkAsyncTaskResponse and BulkTaskStatus dataclasses."""
-
-    def test_bulk_async_task_response_construction(self):
-        from billionverify import BulkAsyncTaskResponse
-        resp = BulkAsyncTaskResponse(
-            task_id="bulk_abc",
-            status="processing",
-            message="ok",
-            status_url="/verify/file/bulk_abc",
-            created_at="2026-05-09T00:00:00Z",
-            estimated_count=500,
-            unique_emails=500,
-        )
-        assert resp.task_id == "bulk_abc"
-        assert resp.estimated_count == 500
-
-    def test_bulk_task_status_construction(self):
-        from billionverify import BulkTaskStatus
-        s = BulkTaskStatus(
-            task_id="bulk_abc",
-            status="completed",
-            progress=100,
-            total_emails=500,
-            processed_emails=500,
-            valid_emails=300, invalid_emails=100, unknown_emails=100,
-            catchall_emails=0, role_emails=0, disposable_emails=0, risky_emails=0,
-            credits_used=500,
-        )
-        assert s.status == "completed"
-        assert s.processed_emails == 500
-
-
 @pytest.mark.asyncio
 class TestAsyncBillionVerifyClient:
     """Tests for async BillionVerify client."""
@@ -594,138 +561,6 @@ class TestAsyncBillionVerifyClient:
         _, kwargs = mock_request.call_args
         assert kwargs["json"]["force_refresh"] is False
         assert kwargs["json"]["include_domain_reputation"] is False
-
-
-class TestVerifyBulkAsync:
-    """Tests for verify_bulk_async on both sync and async clients."""
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_verify_bulk_async_500_emails_returns_task(self):
-        from billionverify import AsyncBillionVerify
-        emails = [f"u{i}@example.com" for i in range(500)]
-        route = respx.post("https://api.billionverify.com/v1/verify/bulk").mock(
-            return_value=httpx.Response(
-                202,
-                json={
-                    "data": {
-                        "task_id": "bulk_001",
-                        "status": "processing",
-                        "message": "queued",
-                        "status_url": "/verify/file/bulk_001",
-                        "created_at": "2026-05-09T00:00:00Z",
-                        "estimated_count": 500,
-                        "unique_emails": 500,
-                    }
-                },
-            )
-        )
-        async with AsyncBillionVerify(api_key="bv_live_test") as c:
-            resp = await c.verify_bulk_async(emails, check_smtp=True)
-        assert route.called
-        assert resp.task_id == "bulk_001"
-        assert resp.estimated_count == 500
-
-    @pytest.mark.asyncio
-    async def test_verify_bulk_async_rejects_more_than_1000(self):
-        from billionverify import AsyncBillionVerify, ValidationError
-        async with AsyncBillionVerify(api_key="bv_live_test") as c:
-            with pytest.raises(ValidationError):
-                await c.verify_bulk_async([f"u{i}@example.com" for i in range(1001)])
-
-    @pytest.mark.asyncio
-    async def test_verify_bulk_async_rejects_less_than_51(self):
-        from billionverify import AsyncBillionVerify, ValidationError
-        async with AsyncBillionVerify(api_key="bv_live_test") as c:
-            with pytest.raises(ValidationError):
-                await c.verify_bulk_async([f"u{i}@example.com" for i in range(50)])
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_get_bulk_task_status_completed(self):
-        from billionverify import AsyncBillionVerify
-        respx.get("https://api.billionverify.com/v1/verify/file/bulk_003").mock(
-            return_value=httpx.Response(
-                200,
-                json={
-                    "data": {
-                        "task_id": "bulk_003",
-                        "status": "completed",
-                        "progress": 100,
-                        "total_emails": 500,
-                        "processed_emails": 500,
-                        "valid_emails": 300,
-                        "invalid_emails": 100,
-                        "unknown_emails": 100,
-                        "credits_used": 500,
-                    }
-                },
-            )
-        )
-        async with AsyncBillionVerify(api_key="bv_live_test") as c:
-            s = await c.get_bulk_task_status("bulk_003")
-        assert s.status == "completed"
-        assert s.processed_emails == 500
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_download_bulk_results_writes_csv(self, tmp_path):
-        from billionverify import AsyncBillionVerify
-        csv_body = b"email,status,reason\nu0@example.com,valid,smtp_deliverable\n"
-        respx.get("https://api.billionverify.com/v1/verify/file/bulk_004/results").mock(
-            return_value=httpx.Response(200, content=csv_body, headers={"Content-Type": "text/csv"}),
-        )
-        out = tmp_path / "results.csv"
-        async with AsyncBillionVerify(api_key="bv_live_test") as c:
-            path = await c.download_bulk_results("bulk_004", str(out))
-        assert path == str(out)
-        assert out.read_bytes() == csv_body
-
-    @respx.mock
-    def test_sync_verify_bulk_async_500_emails(self):
-        from billionverify import BillionVerify
-        emails = [f"u{i}@example.com" for i in range(500)]
-        respx.post("https://api.billionverify.com/v1/verify/bulk").mock(
-            return_value=httpx.Response(
-                202,
-                json={
-                    "data": {
-                        "task_id": "bulk_002",
-                        "status": "processing",
-                        "message": "queued",
-                        "status_url": "/verify/file/bulk_002",
-                        "created_at": "2026-05-09T00:00:00Z",
-                        "estimated_count": 500,
-                    }
-                },
-            )
-        )
-        with BillionVerify(api_key="bv_live_test") as c:
-            resp = c.verify_bulk_async(emails)
-        assert resp.task_id == "bulk_002"
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_verify_bulk_async_accepts_51_emails(self):
-        from billionverify import AsyncBillionVerify
-        emails = [f"u{i}@example.com" for i in range(51)]
-        respx.post("https://api.billionverify.com/v1/verify/bulk").mock(
-            return_value=httpx.Response(
-                202,
-                json={"data": {
-                    "task_id": "bulk_b51",
-                    "status": "processing",
-                    "message": "queued",
-                    "status_url": "/verify/file/bulk_b51",
-                    "created_at": "2026-05-09T00:00:00Z",
-                    "estimated_count": 51,
-                }},
-            )
-        )
-        async with AsyncBillionVerify(api_key="bv_live_test") as c:
-            resp = await c.verify_bulk_async(emails)
-        assert resp.task_id == "bulk_b51"
-        assert resp.estimated_count == 51
 
 
 class TestEmptyAndMalformedResponses:
@@ -809,17 +644,6 @@ class TestEmptyAndMalformedResponses:
             c.verify_bulk(["a@b.com"])
         self._assert_response_error(exc.value, "EMPTY_RESPONSE")
 
-    # ----- /verify/bulk (async 51-1000) -----
-
-    @respx.mock
-    def test_verify_bulk_async_missing_task_id_raises_invalid_response(self):
-        respx.post("https://api.billionverify.com/v1/verify/bulk").mock(
-            return_value=httpx.Response(202, json={"data": {"status": "processing"}})
-        )
-        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
-            c.verify_bulk_async([f"u{i}@x.com" for i in range(60)])
-        self._assert_response_error(exc.value, "INVALID_RESPONSE")
-
     # ----- /verify/file (upload) -----
 
     @respx.mock
@@ -863,27 +687,6 @@ class TestEmptyAndMalformedResponses:
         )
         with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
             c.get_file_task_status("t2")
-        self._assert_response_error(exc.value, "INVALID_RESPONSE")
-
-    # ----- /verify/file/:task_id (bulk async status) -----
-
-    @respx.mock
-    def test_get_bulk_task_status_missing_required_field_raises_invalid_response(self):
-        # BulkTaskStatus requires task_id + status
-        respx.get("https://api.billionverify.com/v1/verify/file/b1").mock(
-            return_value=httpx.Response(200, json={"data": {"progress": 10}})
-        )
-        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
-            c.get_bulk_task_status("b1")
-        self._assert_response_error(exc.value, "INVALID_RESPONSE")
-
-    @respx.mock
-    def test_get_bulk_task_status_empty_dict_raises_invalid_response(self):
-        respx.get("https://api.billionverify.com/v1/verify/file/b2").mock(
-            return_value=httpx.Response(200, json={"data": {}})
-        )
-        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
-            c.get_bulk_task_status("b2")
         self._assert_response_error(exc.value, "INVALID_RESPONSE")
 
     # ----- /credits -----
@@ -963,22 +766,11 @@ class TestEmptyAndMalformedResponses:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_async_verify_bulk_async_missing_task_id(self):
-        respx.post("https://api.billionverify.com/v1/verify/bulk").mock(
-            return_value=httpx.Response(202, json={"data": {"status": "processing"}})
-        )
-        async with AsyncBillionVerify(api_key="k") as c:
-            with pytest.raises(BillionVerifyError) as exc:
-                await c.verify_bulk_async([f"u{i}@x.com" for i in range(60)])
-        self._assert_response_error(exc.value, "INVALID_RESPONSE")
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_async_get_bulk_task_status_empty_raises_empty_response(self):
-        respx.get("https://api.billionverify.com/v1/verify/file/b9").mock(
+    async def test_async_get_file_task_status_empty_raises_empty_response(self):
+        respx.get("https://api.billionverify.com/v1/verify/file/f9").mock(
             return_value=httpx.Response(200, json={"data": None})
         )
         async with AsyncBillionVerify(api_key="k") as c:
             with pytest.raises(BillionVerifyError) as exc:
-                await c.get_bulk_task_status("b9")
+                await c.get_file_task_status("f9")
         self._assert_response_error(exc.value, "EMPTY_RESPONSE")

@@ -511,35 +511,6 @@ class BillionVerify:
                 process_time=data["process_time"],
             )
 
-    def verify_bulk_async(
-        self,
-        emails: List[str],
-        check_smtp: bool = True,
-    ) -> "BulkAsyncTaskResponse":
-        """Sync counterpart to AsyncBillionVerify.verify_bulk_async."""
-        if len(emails) < 51:
-            raise ValidationError("verify_bulk_async requires at least 51 emails; use verify_bulk for ≤50")
-        if len(emails) > 1000:
-            raise ValidationError("verify_bulk_async accepts at most 1000 emails")
-
-        from .types import BulkAsyncTaskResponse
-
-        payload: Dict[str, Any] = {"emails": emails, "check_smtp": check_smtp}
-        raw, metadata = self._request("POST", "/verify/bulk", json=payload)
-        data = _ensure_dict(raw, "/verify/bulk", metadata)
-
-        with _parsing("/verify/bulk", metadata):
-            return BulkAsyncTaskResponse(
-                task_id=data["task_id"],
-                status=data["status"],
-                message=data.get("message", ""),
-                status_url=data.get("status_url", f"/verify/file/{data['task_id']}"),
-                created_at=data.get("created_at", ""),
-                estimated_count=data.get("estimated_count", len(emails)),
-                unique_emails=data.get("unique_emails"),
-                total_emails=data.get("total_emails"),
-            )
-
     def upload_file(
         self,
         file_path: str,
@@ -670,33 +641,6 @@ class BillionVerify:
         out.write_bytes(response.content)
         return str(out)
 
-    def download_bulk_results(
-        self,
-        task_id: str,
-        output_path: str,
-        valid: Optional[bool] = None,
-        invalid: Optional[bool] = None,
-        catchall: Optional[bool] = None,
-        role: Optional[bool] = None,
-        unknown: Optional[bool] = None,
-        disposable: Optional[bool] = None,
-        risky: Optional[bool] = None,
-    ) -> str:
-        """Download bulk async results CSV. Backend reuses /verify/file/:task_id/results."""
-        params: Dict[str, Any] = {}
-        for name, val in (("valid", valid), ("invalid", invalid), ("catchall", catchall),
-                          ("role", role), ("unknown", unknown), ("disposable", disposable),
-                          ("risky", risky)):
-            if val is not None:
-                params[name] = str(val).lower()
-        response = self._request_raw(
-            "GET", f"/verify/file/{task_id}/results",
-            params=params if params else None,
-        )
-        out = Path(output_path)
-        out.write_bytes(response.content)
-        return str(out)
-
     def wait_for_file_task(
         self,
         task_id: str,
@@ -727,28 +671,6 @@ class BillionVerify:
             time.sleep(poll_interval)
 
         raise TimeoutError(f"File task {task_id} did not complete within {max_wait}s")
-
-    def get_bulk_task_status(self, task_id: str, timeout: int = 0) -> "BulkTaskStatus":
-        """Poll a bulk async task. Backend reuses /verify/file/:task_id."""
-        from .types import BulkTaskStatus
-
-        params: Dict[str, Any] = {}
-        if timeout > 0:
-            if timeout > 300:
-                raise ValidationError("Timeout must be between 0 and 300 seconds")
-            params["timeout"] = timeout
-        custom_timeout = self.timeout + timeout if timeout > 0 else None
-        endpoint = f"/verify/file/{task_id}"
-        raw, metadata = self._request(
-            "GET", endpoint,
-            params=params if params else None,
-            custom_timeout=custom_timeout,
-        )
-        data = _ensure_dict(raw, endpoint, metadata)
-        valid_fields = set(BulkTaskStatus.__dataclass_fields__.keys())
-        kwargs = {k: v for k, v in data.items() if k in valid_fields}
-        with _parsing(endpoint, metadata):
-            return BulkTaskStatus(**kwargs)
 
     def get_credits(self) -> CreditsResponse:
         """Get current credit balance.
@@ -1173,38 +1095,6 @@ class AsyncBillionVerify:
                 process_time=data["process_time"],
             )
 
-    async def verify_bulk_async(
-        self,
-        emails: List[str],
-        check_smtp: bool = True,
-    ) -> "BulkAsyncTaskResponse":
-        """Submit a 51-1000 email batch via the async bulk endpoint.
-
-        For batches of 50 or fewer emails, use ``verify_bulk`` instead.
-        """
-        if len(emails) < 51:
-            raise ValidationError("verify_bulk_async requires at least 51 emails; use verify_bulk for ≤50")
-        if len(emails) > 1000:
-            raise ValidationError("verify_bulk_async accepts at most 1000 emails")
-
-        from .types import BulkAsyncTaskResponse
-
-        payload: Dict[str, Any] = {"emails": emails, "check_smtp": check_smtp}
-        raw, metadata = await self._request("POST", "/verify/bulk", json=payload)
-        data = _ensure_dict(raw, "/verify/bulk", metadata)
-
-        with _parsing("/verify/bulk", metadata):
-            return BulkAsyncTaskResponse(
-                task_id=data["task_id"],
-                status=data["status"],
-                message=data.get("message", ""),
-                status_url=data.get("status_url", f"/verify/file/{data['task_id']}"),
-                created_at=data.get("created_at", ""),
-                estimated_count=data.get("estimated_count", len(emails)),
-                unique_emails=data.get("unique_emails"),
-                total_emails=data.get("total_emails"),
-            )
-
     async def upload_file(
         self,
         file_path: str,
@@ -1300,33 +1190,6 @@ class AsyncBillionVerify:
         out.write_bytes(response.content)
         return str(out)
 
-    async def download_bulk_results(
-        self,
-        task_id: str,
-        output_path: str,
-        valid: Optional[bool] = None,
-        invalid: Optional[bool] = None,
-        catchall: Optional[bool] = None,
-        role: Optional[bool] = None,
-        unknown: Optional[bool] = None,
-        disposable: Optional[bool] = None,
-        risky: Optional[bool] = None,
-    ) -> str:
-        """Download bulk async results CSV. Backend reuses /verify/file/:task_id/results."""
-        params: Dict[str, Any] = {}
-        for name, val in (("valid", valid), ("invalid", invalid), ("catchall", catchall),
-                          ("role", role), ("unknown", unknown), ("disposable", disposable),
-                          ("risky", risky)):
-            if val is not None:
-                params[name] = str(val).lower()
-        response = await self._request_raw(
-            "GET", f"/verify/file/{task_id}/results",
-            params=params if params else None,
-        )
-        out = Path(output_path)
-        out.write_bytes(response.content)
-        return str(out)
-
     async def wait_for_file_task(
         self,
         task_id: str,
@@ -1347,28 +1210,6 @@ class AsyncBillionVerify:
             await asyncio.sleep(poll_interval)
 
         raise TimeoutError(f"File task {task_id} did not complete within {max_wait}s")
-
-    async def get_bulk_task_status(self, task_id: str, timeout: int = 0) -> "BulkTaskStatus":
-        """Poll a bulk async task. Backend reuses /verify/file/:task_id."""
-        from .types import BulkTaskStatus
-
-        params: Dict[str, Any] = {}
-        if timeout > 0:
-            if timeout > 300:
-                raise ValidationError("Timeout must be between 0 and 300 seconds")
-            params["timeout"] = timeout
-        custom_timeout = self.timeout + timeout if timeout > 0 else None
-        endpoint = f"/verify/file/{task_id}"
-        raw, metadata = await self._request(
-            "GET", endpoint,
-            params=params if params else None,
-            custom_timeout=custom_timeout,
-        )
-        data = _ensure_dict(raw, endpoint, metadata)
-        valid_fields = set(BulkTaskStatus.__dataclass_fields__.keys())
-        kwargs = {k: v for k, v in data.items() if k in valid_fields}
-        with _parsing(endpoint, metadata):
-            return BulkTaskStatus(**kwargs)
 
     async def get_credits(self) -> CreditsResponse:
         """Get current credit balance."""

@@ -11,8 +11,6 @@ from .exceptions import (
     ValidationError,
 )
 from .types import (
-    BulkAsyncTaskResponse,
-    BulkTaskStatus,
     BulkVerificationResult,
     BulkVerifyResponse,
     CreditsResponse,
@@ -28,7 +26,7 @@ from .types import (
     WebhookEvent,
 )
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 __all__ = [
     # Clients
@@ -40,8 +38,6 @@ __all__ = [
     "ResponseMetadata",
     "BulkVerificationResult",
     "BulkVerifyResponse",
-    "BulkAsyncTaskResponse",
-    "BulkTaskStatus",
     "FileUploadResponse",
     "FileTaskStatus",
     "CreditsResponse",
