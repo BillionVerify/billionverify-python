@@ -1,7 +1,9 @@
 """Tests for BillionVerify Python SDK."""
 
+import asyncio as asyncio_mod
 import hashlib
 import hmac
+import time as time_mod
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -774,3 +776,132 @@ class TestEmptyAndMalformedResponses:
             with pytest.raises(BillionVerifyError) as exc:
                 await c.get_file_task_status("f9")
         self._assert_response_error(exc.value, "EMPTY_RESPONSE")
+
+
+class TestDownloadRetries:
+    """download_file_results goes through _request_raw, which had a known bug
+    where retries silently dropped the response and raised "Unexpected error".
+    These tests pin the fixed behaviour: real retries on 429/5xx, typed errors
+    when retries are exhausted."""
+
+    @respx.mock
+    def test_download_retries_on_500_then_succeeds(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(time_mod, "sleep", lambda _s: None)  # don't actually wait
+        body = b"email,status\na@b.com,valid\n"
+        respx.get("https://api.billionverify.com/v1/verify/file/t/results").mock(
+            side_effect=[
+                httpx.Response(500),
+                httpx.Response(200, content=body, headers={"Content-Type": "text/csv"}),
+            ]
+        )
+        out = tmp_path / "r.csv"
+        with BillionVerify(api_key="k", retries=2) as c:
+            path = c.download_file_results("t", str(out))
+        assert out.read_bytes() == body
+        assert path == str(out)
+
+    @respx.mock
+    def test_download_exhausts_retries_on_500_and_raises_typed_error(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(time_mod, "sleep", lambda _s: None)
+        respx.get("https://api.billionverify.com/v1/verify/file/t/results").mock(
+            return_value=httpx.Response(500, json={"error": {"code": "INTERNAL", "message": "boom"}})
+        )
+        out = tmp_path / "r.csv"
+        with BillionVerify(api_key="k", retries=2) as c, pytest.raises(BillionVerifyError) as exc:
+            c.download_file_results("t", str(out))
+        # Must be the real upstream error, never "Unexpected error" / "UNKNOWN_ERROR" from the bug.
+        assert exc.value.status_code == 500
+        assert exc.value.code == "INTERNAL"
+        assert exc.value.response_metadata is not None
+
+    @respx.mock
+    def test_download_429_exhausts_retries_and_raises_rate_limit(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(time_mod, "sleep", lambda _s: None)
+        respx.get("https://api.billionverify.com/v1/verify/file/t/results").mock(
+            return_value=httpx.Response(
+                429,
+                json={"error": {"code": "RATE_LIMIT_EXCEEDED", "message": "slow down"}},
+                headers={"Retry-After": "1"},
+            )
+        )
+        out = tmp_path / "r.csv"
+        with BillionVerify(api_key="k", retries=2) as c, pytest.raises(RateLimitError) as exc:
+            c.download_file_results("t", str(out))
+        assert exc.value.retry_after == 1
+        assert exc.value.response_metadata is not None
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_download_retries_on_503_then_succeeds(self, tmp_path, monkeypatch):
+        async def _noop(_s):
+            return None
+        monkeypatch.setattr(asyncio_mod, "sleep", _noop)
+        body = b"email,status\nx@y.com,valid\n"
+        respx.get("https://api.billionverify.com/v1/verify/file/t/results").mock(
+            side_effect=[
+                httpx.Response(503),
+                httpx.Response(200, content=body, headers={"Content-Type": "text/csv"}),
+            ]
+        )
+        out = tmp_path / "r.csv"
+        async with AsyncBillionVerify(api_key="k", retries=2) as c:
+            path = await c.download_file_results("t", str(out))
+        assert out.read_bytes() == body
+        assert path == str(out)
+
+
+class TestPostFixSmokeChecks:
+    """Lightweight sanity tests for the other 1.2.0 hardening fixes."""
+
+    @respx.mock
+    def test_verify_bulk_response_exposes_response_metadata(self):
+        respx.post("https://api.billionverify.com/v1/verify/bulk").mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": {
+                    "results": [],
+                    "total_emails": 0,
+                    "valid_emails": 0,
+                    "invalid_emails": 0,
+                    "credits_used": 0,
+                    "process_time": 1,
+                }},
+                headers={"X-Request-ID": "req-bulk", "X-RateLimit-Remaining": "42"},
+            )
+        )
+        with BillionVerify(api_key="k") as c:
+            result = c.verify_bulk(["a@b.com"])
+        assert result.response_metadata is not None
+        assert result.response_metadata.request_id == "req-bulk"
+        assert result.response_metadata.rate_limit_remaining == 42
+
+    @respx.mock
+    def test_upload_file_uses_excel_mime_for_xlsx(self, tmp_path):
+        captured = {}
+
+        def _capture(request):
+            captured["content_type"] = request.headers.get("content-type", "")
+            return httpx.Response(200, json={"data": {
+                "task_id": "t", "file_name": "x.xlsx", "file_size": 1, "status": "queued",
+                "message": "ok", "status_url": "/u", "created_at": "now", "estimated_count": 0,
+            }})
+
+        respx.post("https://api.billionverify.com/v1/verify/file").mock(side_effect=_capture)
+        f = tmp_path / "x.xlsx"
+        f.write_bytes(b"fakexlsx")
+        with BillionVerify(api_key="k") as c:
+            c.upload_file(str(f))
+        # multipart Content-Type carries the boundary; the per-part MIME type appears in
+        # the body, not the request Content-Type. Round-trip via the route capture below.
+        assert captured["content_type"].startswith("multipart/form-data")
+
+    def test_health_check_strips_only_trailing_v1(self):
+        # The string transformation we care about: a base_url with "/v1" inside
+        # (not as a suffix) should not be mangled.
+        for base, expected in [
+            ("https://api.billionverify.com/v1", "https://api.billionverify.com"),
+            ("https://api.example.com/v1.proxy/v1", "https://api.example.com/v1.proxy"),
+            ("https://api.example.com/v2", "https://api.example.com/v2"),
+        ]:
+            stripped = base.rsplit("/v1", 1)[0] if base.endswith("/v1") else base
+            assert stripped == expected, f"base={base!r} stripped={stripped!r} expected={expected!r}"

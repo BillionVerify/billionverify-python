@@ -85,6 +85,7 @@ class BulkVerifyResponse:
     invalid_emails: int
     credits_used: int
     process_time: int
+    response_metadata: Optional[ResponseMetadata] = None
 
 
 @dataclass

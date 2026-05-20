@@ -1,7 +1,9 @@
 """BillionVerify Python SDK Client."""
 
+import asyncio
 import hashlib
 import hmac
+import mimetypes
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -118,6 +120,26 @@ def _ensure_list(
             response_metadata=metadata,
         )
     return data
+
+
+def _raise_typed_error(response: httpx.Response, metadata: ResponseMetadata) -> None:
+    """Map an error response to the right typed exception. Always raises.
+
+    Does not retry — callers decide whether to retry before invoking this.
+    """
+    message, code, details = _decode_error_envelope(response)
+    status = response.status_code
+    if status == 401:
+        raise AuthenticationError(message, response_metadata=metadata)
+    if status == 402:
+        raise InsufficientCreditsError(message, response_metadata=metadata)
+    if status == 404:
+        raise NotFoundError(message, response_metadata=metadata)
+    if status == 429:
+        raise RateLimitError(message, metadata.retry_after or 0, response_metadata=metadata)
+    if status == 400:
+        raise ValidationError(message, details, response_metadata=metadata)
+    raise BillionVerifyError(message, code, status, details, response_metadata=metadata)
 
 
 def _decode_error_envelope(response: httpx.Response) -> "tuple[str, str, Optional[str]]":
@@ -290,9 +312,9 @@ class BillionVerify:
                     timeout=request_timeout,
                 )
         except httpx.TimeoutException as e:
-            raise TimeoutError(f"Request timed out: {e}")
+            raise TimeoutError(f"Request timed out: {e}") from e
         except httpx.RequestError as e:
-            raise BillionVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0)
+            raise BillionVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0) from e
 
         metadata = _response_metadata(response)
 
@@ -303,7 +325,7 @@ class BillionVerify:
             return _decode_success_body(response, path, metadata), metadata
 
         return self._handle_error(
-            response, method, path, json, params, attempt, files, custom_timeout, skip_auth
+            response, method, path, json, params, attempt, files, custom_timeout
         )
 
     def _request_raw(
@@ -313,26 +335,39 @@ class BillionVerify:
         params: Optional[Dict[str, Any]] = None,
         custom_timeout: Optional[float] = None,
     ) -> httpx.Response:
-        """Make an HTTP request and return the raw response (for file downloads)."""
-        try:
-            response = self._client.request(
-                method=method,
-                url=path,
-                params=params,
-                timeout=custom_timeout or self.timeout,
-                follow_redirects=True,
-            )
-        except httpx.TimeoutException as e:
-            raise TimeoutError(f"Request timed out: {e}")
-        except httpx.RequestError as e:
-            raise BillionVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0)
+        """Make an HTTP request and return the raw response (for file downloads).
 
-        if response.is_success:
-            return response
+        Owns its own retry loop because the parsed-body retry path in ``_request``
+        cannot return an ``httpx.Response`` — retrying through ``_handle_error``
+        would mix response shapes.
+        """
+        for attempt in range(1, self.retries + 1):
+            try:
+                response = self._client.request(
+                    method=method,
+                    url=path,
+                    params=params,
+                    timeout=custom_timeout or self.timeout,
+                    follow_redirects=True,
+                )
+            except httpx.TimeoutException as e:
+                raise TimeoutError(f"Request timed out: {e}") from e
+            except httpx.RequestError as e:
+                raise BillionVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0) from e
 
-        self._handle_error(response, method, path, None, params, 1)
-        # unreachable, _handle_error always raises
-        raise BillionVerifyError("Unexpected error", "UNKNOWN_ERROR", 0)
+            if response.is_success:
+                return response
+
+            metadata = _response_metadata(response)
+            status = response.status_code
+            if attempt < self.retries and status in (429, 500, 502, 503):
+                backoff = metadata.retry_after if status == 429 and metadata.retry_after else (2 ** attempt)
+                time.sleep(backoff)
+                continue
+            _raise_typed_error(response, metadata)
+        # Loop only exits via return or raise; this line is unreachable but
+        # satisfies type checkers that demand a terminal return.
+        raise BillionVerifyError("retries exhausted", "UNKNOWN_ERROR", 0)
 
     def _handle_error(
         self,
@@ -344,43 +379,18 @@ class BillionVerify:
         attempt: int,
         files: Optional[Dict[str, Any]] = None,
         custom_timeout: Optional[float] = None,
-        skip_auth: bool = False,
     ) -> "tuple[Any, ResponseMetadata]":
-        """Handle error responses."""
+        """Decide whether to retry the request or raise a typed error."""
         metadata = _response_metadata(response)
-        message, code, details = _decode_error_envelope(response)
-
         status = response.status_code
 
-        if status == 401:
-            raise AuthenticationError(message, response_metadata=metadata)
+        if attempt < self.retries and status in (429, 500, 502, 503):
+            backoff = metadata.retry_after if status == 429 and metadata.retry_after else (2 ** attempt)
+            time.sleep(backoff)
+            return self._request(method, path, json, params, attempt + 1, files, custom_timeout)
 
-        if status == 402:
-            raise InsufficientCreditsError(message, response_metadata=metadata)
-
-        if status == 404:
-            raise NotFoundError(message, response_metadata=metadata)
-
-        if status == 429:
-            retry_after = metadata.retry_after or 0
-            if attempt < self.retries:
-                time.sleep(retry_after or (2**attempt))
-                return self._request(
-                    method, path, json, params, attempt + 1, files, custom_timeout, skip_auth
-                )
-            raise RateLimitError(message, retry_after, response_metadata=metadata)
-
-        if status == 400:
-            raise ValidationError(message, details, response_metadata=metadata)
-
-        if status in (500, 502, 503):
-            if attempt < self.retries:
-                time.sleep(2**attempt)
-                return self._request(
-                    method, path, json, params, attempt + 1, files, custom_timeout, skip_auth
-                )
-
-        raise BillionVerifyError(message, code, status, details, response_metadata=metadata)
+        _raise_typed_error(response, metadata)
+        raise BillionVerifyError("retries exhausted", "UNKNOWN_ERROR", 0)  # unreachable
 
     def health_check(self) -> HealthCheckResponse:
         """Check API health status (no authentication required).
@@ -388,15 +398,17 @@ class BillionVerify:
         Returns:
             HealthCheckResponse with status information.
         """
-        # Health check is at the root, not under /v1
-        base_without_version = self.base_url.replace("/v1", "")
+        # Health check is at the root, not under /v1. Strip only the trailing
+        # /v1 so custom base URLs that happen to contain "/v1" elsewhere
+        # (e.g. https://host/v1.proxy/v1) aren't mangled.
+        base_without_version = self.base_url.rsplit("/v1", 1)[0] if self.base_url.endswith("/v1") else self.base_url
         try:
             response = httpx.get(
                 f"{base_without_version}/health",
                 timeout=self.timeout,
             )
         except httpx.RequestError as e:
-            raise BillionVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0)
+            raise BillionVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0) from e
 
         metadata = _response_metadata(response)
         if not response.is_success:
@@ -509,6 +521,7 @@ class BillionVerify:
                 invalid_emails=data["invalid_emails"],
                 credits_used=data["credits_used"],
                 process_time=data["process_time"],
+                response_metadata=metadata,
             )
 
     def upload_file(
@@ -533,8 +546,9 @@ class BillionVerify:
         if not path.exists():
             raise ValidationError(f"File not found: {file_path}")
 
+        mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         with open(path, "rb") as f:
-            files = {"file": (path.name, f, "text/csv")}
+            files = {"file": (path.name, f, mime_type)}
             form_data: Dict[str, Any] = {"check_smtp": str(check_smtp).lower()}
             if email_column:
                 form_data["email_column"] = email_column
@@ -895,9 +909,9 @@ class AsyncBillionVerify:
                     timeout=request_timeout,
                 )
         except httpx.TimeoutException as e:
-            raise TimeoutError(f"Request timed out: {e}")
+            raise TimeoutError(f"Request timed out: {e}") from e
         except httpx.RequestError as e:
-            raise BillionVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0)
+            raise BillionVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0) from e
 
         metadata = _response_metadata(response)
 
@@ -908,7 +922,7 @@ class AsyncBillionVerify:
             return _decode_success_body(response, path, metadata), metadata
 
         return await self._handle_error(
-            response, method, path, json, params, attempt, files, custom_timeout, skip_auth
+            response, method, path, json, params, attempt, files, custom_timeout
         )
 
     async def _request_raw(
@@ -918,25 +932,35 @@ class AsyncBillionVerify:
         params: Optional[Dict[str, Any]] = None,
         custom_timeout: Optional[float] = None,
     ) -> httpx.Response:
-        """Make an async HTTP request and return the raw response (for file downloads)."""
-        try:
-            response = await self._client.request(
-                method=method,
-                url=path,
-                params=params,
-                timeout=custom_timeout or self.timeout,
-                follow_redirects=True,
-            )
-        except httpx.TimeoutException as e:
-            raise TimeoutError(f"Request timed out: {e}")
-        except httpx.RequestError as e:
-            raise BillionVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0)
+        """Make an async HTTP request and return the raw response (for file downloads).
 
-        if response.is_success:
-            return response
+        Owns its own retry loop; see sync ``_request_raw`` for rationale.
+        """
+        for attempt in range(1, self.retries + 1):
+            try:
+                response = await self._client.request(
+                    method=method,
+                    url=path,
+                    params=params,
+                    timeout=custom_timeout or self.timeout,
+                    follow_redirects=True,
+                )
+            except httpx.TimeoutException as e:
+                raise TimeoutError(f"Request timed out: {e}") from e
+            except httpx.RequestError as e:
+                raise BillionVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0) from e
 
-        await self._handle_error(response, method, path, None, params, 1)
-        raise BillionVerifyError("Unexpected error", "UNKNOWN_ERROR", 0)
+            if response.is_success:
+                return response
+
+            metadata = _response_metadata(response)
+            status = response.status_code
+            if attempt < self.retries and status in (429, 500, 502, 503):
+                backoff = metadata.retry_after if status == 429 and metadata.retry_after else (2 ** attempt)
+                await asyncio.sleep(backoff)
+                continue
+            _raise_typed_error(response, metadata)
+        raise BillionVerifyError("retries exhausted", "UNKNOWN_ERROR", 0)  # unreachable
 
     async def _handle_error(
         self,
@@ -948,49 +972,22 @@ class AsyncBillionVerify:
         attempt: int,
         files: Optional[Dict[str, Any]] = None,
         custom_timeout: Optional[float] = None,
-        skip_auth: bool = False,
     ) -> "tuple[Any, ResponseMetadata]":
-        """Handle error responses."""
-        import asyncio
-
+        """Decide whether to retry the request or raise a typed error."""
         metadata = _response_metadata(response)
-        message, code, details = _decode_error_envelope(response)
-
         status = response.status_code
 
-        if status == 401:
-            raise AuthenticationError(message, response_metadata=metadata)
+        if attempt < self.retries and status in (429, 500, 502, 503):
+            backoff = metadata.retry_after if status == 429 and metadata.retry_after else (2 ** attempt)
+            await asyncio.sleep(backoff)
+            return await self._request(method, path, json, params, attempt + 1, files, custom_timeout)
 
-        if status == 402:
-            raise InsufficientCreditsError(message, response_metadata=metadata)
-
-        if status == 404:
-            raise NotFoundError(message, response_metadata=metadata)
-
-        if status == 429:
-            retry_after = metadata.retry_after or 0
-            if attempt < self.retries:
-                await asyncio.sleep(retry_after or (2**attempt))
-                return await self._request(
-                    method, path, json, params, attempt + 1, files, custom_timeout, skip_auth
-                )
-            raise RateLimitError(message, retry_after, response_metadata=metadata)
-
-        if status == 400:
-            raise ValidationError(message, details, response_metadata=metadata)
-
-        if status in (500, 502, 503):
-            if attempt < self.retries:
-                await asyncio.sleep(2**attempt)
-                return await self._request(
-                    method, path, json, params, attempt + 1, files, custom_timeout, skip_auth
-                )
-
-        raise BillionVerifyError(message, code, status, details, response_metadata=metadata)
+        _raise_typed_error(response, metadata)
+        raise BillionVerifyError("retries exhausted", "UNKNOWN_ERROR", 0)  # unreachable
 
     async def health_check(self) -> HealthCheckResponse:
         """Check API health status (no authentication required)."""
-        base_without_version = self.base_url.replace("/v1", "")
+        base_without_version = self.base_url.rsplit("/v1", 1)[0] if self.base_url.endswith("/v1") else self.base_url
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get(
@@ -998,7 +995,7 @@ class AsyncBillionVerify:
                     timeout=self.timeout,
                 )
         except httpx.RequestError as e:
-            raise BillionVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0)
+            raise BillionVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0) from e
 
         metadata = _response_metadata(response)
         if not response.is_success:
@@ -1093,6 +1090,7 @@ class AsyncBillionVerify:
                 invalid_emails=data["invalid_emails"],
                 credits_used=data["credits_used"],
                 process_time=data["process_time"],
+                response_metadata=metadata,
             )
 
     async def upload_file(
@@ -1107,8 +1105,9 @@ class AsyncBillionVerify:
         if not path.exists():
             raise ValidationError(f"File not found: {file_path}")
 
+        mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         with open(path, "rb") as f:
-            files = {"file": (path.name, f.read(), "text/csv")}
+            files = {"file": (path.name, f.read(), mime_type)}
             form_data: Dict[str, Any] = {"check_smtp": str(check_smtp).lower()}
             if email_column:
                 form_data["email_column"] = email_column
@@ -1197,8 +1196,6 @@ class AsyncBillionVerify:
         max_wait: float = 600.0,
     ) -> FileTaskStatus:
         """Poll for file task completion."""
-        import asyncio
-
         start_time = time.time()
 
         while time.time() - start_time < max_wait:
