@@ -219,6 +219,7 @@ is_valid = BillionVerify.verify_webhook_signature(
 ```python
 from billionverify import (
     BillionVerify,
+    BillionVerifyError,
     AuthenticationError,
     RateLimitError,
     ValidationError,
@@ -242,6 +243,35 @@ except NotFoundError:
     print("Resource not found")
 except TimeoutError:
     print("Request timed out")
+except BillionVerifyError as e:
+    # Catch-all for anything else, including the response-shape codes below.
+    print(f"{e.code}: {e.message}")
+```
+
+### Malformed or empty server responses
+
+The SDK never lets a malformed API reply leak out as a raw `KeyError`,
+`TypeError`, or `json.JSONDecodeError`. Empty bodies, `null` payloads,
+non-JSON content, and responses missing required fields are all surfaced
+as a typed `BillionVerifyError` with `response_metadata` populated, so you
+can recover and log the request ID:
+
+| `error.code`       | When it fires                                              |
+| ------------------ | ---------------------------------------------------------- |
+| `EMPTY_RESPONSE`   | 2xx with no body, or envelope `{"data": null}`             |
+| `INVALID_RESPONSE` | Non-JSON body, wrong top-level shape, or missing fields    |
+
+```python
+try:
+    result = client.verify("user@example.com")
+except BillionVerifyError as e:
+    if e.code in ("EMPTY_RESPONSE", "INVALID_RESPONSE"):
+        log.error("bad upstream reply", extra={
+            "request_id": e.response_metadata.request_id,
+            "status": e.response_metadata.status_code,
+            "details": e.details,
+        })
+    raise
 ```
 
 ## Context Manager

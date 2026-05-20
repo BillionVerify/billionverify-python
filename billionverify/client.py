@@ -3,8 +3,9 @@
 import hashlib
 import hmac
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 import httpx
 
@@ -65,6 +66,127 @@ def _response_metadata(response: httpx.Response) -> ResponseMetadata:
     )
 
 
+def _metadata_status(metadata: Optional[ResponseMetadata]) -> int:
+    return metadata.status_code if metadata else 0
+
+
+def _ensure_dict(
+    data: Any,
+    endpoint: str,
+    metadata: Optional[ResponseMetadata],
+) -> Dict[str, Any]:
+    """Validate that an API response payload is a non-null object.
+
+    Raises BillionVerifyError with EMPTY_RESPONSE / INVALID_RESPONSE so callers
+    never see raw KeyError/TypeError from a malformed server reply.
+    """
+    if data is None:
+        raise BillionVerifyError(
+            f"empty response from {endpoint}",
+            "EMPTY_RESPONSE",
+            _metadata_status(metadata),
+            response_metadata=metadata,
+        )
+    if not isinstance(data, dict):
+        raise BillionVerifyError(
+            f"unexpected response type from {endpoint}: expected object, got {type(data).__name__}",
+            "INVALID_RESPONSE",
+            _metadata_status(metadata),
+            response_metadata=metadata,
+        )
+    return data
+
+
+def _ensure_list(
+    data: Any,
+    endpoint: str,
+    metadata: Optional[ResponseMetadata],
+) -> List[Any]:
+    """Validate that an API response payload is a non-null list."""
+    if data is None:
+        raise BillionVerifyError(
+            f"empty response from {endpoint}",
+            "EMPTY_RESPONSE",
+            _metadata_status(metadata),
+            response_metadata=metadata,
+        )
+    if not isinstance(data, list):
+        raise BillionVerifyError(
+            f"unexpected response type from {endpoint}: expected array, got {type(data).__name__}",
+            "INVALID_RESPONSE",
+            _metadata_status(metadata),
+            response_metadata=metadata,
+        )
+    return data
+
+
+def _decode_error_envelope(response: httpx.Response) -> "tuple[str, str, Optional[str]]":
+    """Best-effort decode of an error response into (message, code, details).
+
+    Never raises: malformed or empty error bodies fall back to the status reason.
+    """
+    try:
+        body = response.json()
+    except Exception:
+        return response.reason_phrase, "UNKNOWN_ERROR", None
+    if not isinstance(body, dict):
+        return response.reason_phrase, "UNKNOWN_ERROR", None
+    error = body.get("error")
+    if not isinstance(error, dict):
+        return response.reason_phrase, "UNKNOWN_ERROR", None
+    return (
+        error.get("message", response.reason_phrase),
+        error.get("code", "UNKNOWN_ERROR"),
+        error.get("details"),
+    )
+
+
+def _decode_success_body(
+    response: httpx.Response,
+    endpoint: str,
+    metadata: ResponseMetadata,
+) -> Any:
+    """Decode a 2xx response body into the envelope's ``data`` payload.
+
+    Empty bodies become ``None``. Non-JSON bodies raise INVALID_RESPONSE so the
+    caller never sees a raw JSONDecodeError. A non-dict top-level value is
+    returned as-is (callers validate shape themselves).
+    """
+    body = response.content
+    if not body:
+        return None
+    try:
+        result = response.json()
+    except ValueError as exc:
+        raise BillionVerifyError(
+            f"invalid JSON in response from {endpoint}: {exc}",
+            "INVALID_RESPONSE",
+            metadata.status_code,
+            details=str(exc),
+            response_metadata=metadata,
+        ) from exc
+    if isinstance(result, dict) and "data" in result:
+        return result["data"]
+    return result
+
+
+@contextmanager
+def _parsing(endpoint: str, metadata: Optional[ResponseMetadata]) -> Iterator[None]:
+    """Translate dataclass/field-access errors into typed INVALID_RESPONSE."""
+    try:
+        yield
+    except BillionVerifyError:
+        raise
+    except (KeyError, TypeError, AttributeError, ValueError) as exc:
+        raise BillionVerifyError(
+            f"malformed response from {endpoint}: {exc}",
+            "INVALID_RESPONSE",
+            _metadata_status(metadata),
+            details=str(exc),
+            response_metadata=metadata,
+        ) from exc
+
+
 class BillionVerify:
     """BillionVerify API Client."""
 
@@ -120,9 +242,14 @@ class BillionVerify:
         files: Optional[Dict[str, Any]] = None,
         custom_timeout: Optional[float] = None,
         skip_auth: bool = False,
-        return_metadata: bool = False,
-    ) -> Any:
-        """Make an HTTP request to the API."""
+    ) -> "tuple[Any, ResponseMetadata]":
+        """Make an HTTP request to the API.
+
+        Always returns ``(data, metadata)``. ``data`` is ``None`` for 204 and for
+        success responses whose body is empty or whose envelope ``data`` field is
+        null; callers that require a payload should validate it with
+        :func:`_ensure_dict` or :func:`_ensure_list`.
+        """
         try:
             headers = {}
             if skip_auth:
@@ -167,22 +294,16 @@ class BillionVerify:
         except httpx.RequestError as e:
             raise BillionVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0)
 
+        metadata = _response_metadata(response)
+
         if response.status_code == 204:
-            metadata = _response_metadata(response)
-            return (None, metadata) if return_metadata else None
+            return None, metadata
 
         if response.is_success:
-            metadata = _response_metadata(response)
-            result = response.json()
-            # Extract data from API wrapper response {success, code, message, data}
-            if isinstance(result, dict) and "data" in result:
-                data = result["data"]
-            else:
-                data = result
-            return (data, metadata) if return_metadata else data
+            return _decode_success_body(response, path, metadata), metadata
 
         return self._handle_error(
-            response, method, path, json, params, attempt, files, custom_timeout, skip_auth, return_metadata
+            response, method, path, json, params, attempt, files, custom_timeout, skip_auth
         )
 
     def _request_raw(
@@ -224,20 +345,10 @@ class BillionVerify:
         files: Optional[Dict[str, Any]] = None,
         custom_timeout: Optional[float] = None,
         skip_auth: bool = False,
-        return_metadata: bool = False,
-    ) -> Any:
+    ) -> "tuple[Any, ResponseMetadata]":
         """Handle error responses."""
         metadata = _response_metadata(response)
-        try:
-            data = response.json()
-            error = data.get("error", {})
-            message = error.get("message", response.reason_phrase)
-            code = error.get("code", "UNKNOWN_ERROR")
-            details = error.get("details")
-        except Exception:
-            message = response.reason_phrase
-            code = "UNKNOWN_ERROR"
-            details = None
+        message, code, details = _decode_error_envelope(response)
 
         status = response.status_code
 
@@ -255,7 +366,7 @@ class BillionVerify:
             if attempt < self.retries:
                 time.sleep(retry_after or (2**attempt))
                 return self._request(
-                    method, path, json, params, attempt + 1, files, custom_timeout, skip_auth, return_metadata
+                    method, path, json, params, attempt + 1, files, custom_timeout, skip_auth
                 )
             raise RateLimitError(message, retry_after, response_metadata=metadata)
 
@@ -266,7 +377,7 @@ class BillionVerify:
             if attempt < self.retries:
                 time.sleep(2**attempt)
                 return self._request(
-                    method, path, json, params, attempt + 1, files, custom_timeout, skip_auth, return_metadata
+                    method, path, json, params, attempt + 1, files, custom_timeout, skip_auth
                 )
 
         raise BillionVerifyError(message, code, status, details, response_metadata=metadata)
@@ -284,15 +395,20 @@ class BillionVerify:
                 f"{base_without_version}/health",
                 timeout=self.timeout,
             )
-            if response.is_success:
-                data = response.json()
-                return HealthCheckResponse(
-                    status=data["status"],
-                    version=data.get("version"),
-                )
-            raise BillionVerifyError("Health check failed", "HEALTH_CHECK_FAILED", response.status_code)
         except httpx.RequestError as e:
             raise BillionVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0)
+
+        metadata = _response_metadata(response)
+        if not response.is_success:
+            raise BillionVerifyError(
+                "Health check failed", "HEALTH_CHECK_FAILED", response.status_code, response_metadata=metadata
+            )
+        data = _ensure_dict(_decode_success_body(response, "/health", metadata), "/health", metadata)
+        with _parsing("/health", metadata):
+            return HealthCheckResponse(
+                status=data["status"],
+                version=data.get("version"),
+            )
 
     def verify(
         self,
@@ -319,32 +435,34 @@ class BillionVerify:
             "include_domain_reputation": include_domain_reputation,
         }
 
-        data, metadata = self._request("POST", "/verify/single", json=payload, return_metadata=True)
+        raw, metadata = self._request("POST", "/verify/single", json=payload)
+        data = _ensure_dict(raw, "/verify/single", metadata)
 
-        return VerificationResult(
-            email=data["email"],
-            status=data["status"],
-            score=data["score"],
-            is_deliverable=data["is_deliverable"],
-            is_disposable=data["is_disposable"],
-            is_catchall=data["is_catchall"],
-            is_role=data["is_role"],
-            is_free=data["is_free"],
-            domain=data["domain"],
-            check_smtp=data.get("check_smtp", False),
-            reason=data.get("reason", ""),
-            response_time=data["response_time"],
-            credits_used=data["credits_used"],
-            domain_age=data.get("domain_age"),
-            mx_records=data.get("mx_records", []),
-            domain_reputation=DomainReputation(**data["domain_reputation"]) if data.get("domain_reputation") else None,
-            domain_suggestion=data.get("domain_suggestion"),
-            has_gravatar=data.get("has_gravatar", False),
-            gravatar_url=data.get("gravatar_url"),
-            smtp_response=data.get("smtp_response"),
-            error_message=data.get("error_message"),
-            response_metadata=metadata,
-        )
+        with _parsing("/verify/single", metadata):
+            return VerificationResult(
+                email=data["email"],
+                status=data["status"],
+                score=data["score"],
+                is_deliverable=data["is_deliverable"],
+                is_disposable=data["is_disposable"],
+                is_catchall=data["is_catchall"],
+                is_role=data["is_role"],
+                is_free=data["is_free"],
+                domain=data["domain"],
+                check_smtp=data.get("check_smtp", False),
+                reason=data.get("reason", ""),
+                response_time=data["response_time"],
+                credits_used=data["credits_used"],
+                domain_age=data.get("domain_age"),
+                mx_records=data.get("mx_records", []),
+                domain_reputation=DomainReputation(**data["domain_reputation"]) if data.get("domain_reputation") else None,
+                domain_suggestion=data.get("domain_suggestion"),
+                has_gravatar=data.get("has_gravatar", False),
+                gravatar_url=data.get("gravatar_url"),
+                smtp_response=data.get("smtp_response"),
+                error_message=data.get("error_message"),
+                response_metadata=metadata,
+            )
 
     def verify_bulk(
         self,
@@ -365,32 +483,33 @@ class BillionVerify:
 
         payload: Dict[str, Any] = {"emails": emails, "check_smtp": check_smtp}
 
-        data = self._request("POST", "/verify/bulk", json=payload)
+        raw, metadata = self._request("POST", "/verify/bulk", json=payload)
+        data = _ensure_dict(raw, "/verify/bulk", metadata)
 
-        results = [
-            BulkVerificationResult(
-                email=item["email"],
-                status=item["status"],
-                score=item["score"],
-                is_deliverable=item["is_deliverable"],
-                is_disposable=item["is_disposable"],
-                is_catchall=item["is_catchall"],
-                is_role=item["is_role"],
-                is_free=item["is_free"],
-                domain=item["domain"],
-                reason=item["reason"],
+        with _parsing("/verify/bulk", metadata):
+            results = [
+                BulkVerificationResult(
+                    email=item["email"],
+                    status=item["status"],
+                    score=item["score"],
+                    is_deliverable=item["is_deliverable"],
+                    is_disposable=item["is_disposable"],
+                    is_catchall=item["is_catchall"],
+                    is_role=item["is_role"],
+                    is_free=item["is_free"],
+                    domain=item["domain"],
+                    reason=item["reason"],
+                )
+                for item in data["results"]
+            ]
+            return BulkVerifyResponse(
+                results=results,
+                total_emails=data["total_emails"],
+                valid_emails=data["valid_emails"],
+                invalid_emails=data["invalid_emails"],
+                credits_used=data["credits_used"],
+                process_time=data["process_time"],
             )
-            for item in data["results"]
-        ]
-
-        return BulkVerifyResponse(
-            results=results,
-            total_emails=data["total_emails"],
-            valid_emails=data["valid_emails"],
-            invalid_emails=data["invalid_emails"],
-            credits_used=data["credits_used"],
-            process_time=data["process_time"],
-        )
 
     def verify_bulk_async(
         self,
@@ -406,18 +525,20 @@ class BillionVerify:
         from .types import BulkAsyncTaskResponse
 
         payload: Dict[str, Any] = {"emails": emails, "check_smtp": check_smtp}
-        data = self._request("POST", "/verify/bulk", json=payload)
+        raw, metadata = self._request("POST", "/verify/bulk", json=payload)
+        data = _ensure_dict(raw, "/verify/bulk", metadata)
 
-        return BulkAsyncTaskResponse(
-            task_id=data["task_id"],
-            status=data["status"],
-            message=data.get("message", ""),
-            status_url=data.get("status_url", f"/verify/file/{data['task_id']}"),
-            created_at=data.get("created_at", ""),
-            estimated_count=data.get("estimated_count", len(emails)),
-            unique_emails=data.get("unique_emails"),
-            total_emails=data.get("total_emails"),
-        )
+        with _parsing("/verify/bulk", metadata):
+            return BulkAsyncTaskResponse(
+                task_id=data["task_id"],
+                status=data["status"],
+                message=data.get("message", ""),
+                status_url=data.get("status_url", f"/verify/file/{data['task_id']}"),
+                created_at=data.get("created_at", ""),
+                estimated_count=data.get("estimated_count", len(emails)),
+                unique_emails=data.get("unique_emails"),
+                total_emails=data.get("total_emails"),
+            )
 
     def upload_file(
         self,
@@ -448,21 +569,23 @@ class BillionVerify:
                 form_data["email_column"] = email_column
             form_data["preserve_original"] = str(preserve_original).lower()
 
-            data = self._request("POST", "/verify/file", json=form_data, files=files)
+            raw, metadata = self._request("POST", "/verify/file", json=form_data, files=files)
 
-        return FileUploadResponse(
-            task_id=data["task_id"],
-            file_name=data["file_name"],
-            file_size=data["file_size"],
-            status=data["status"],
-            message=data["message"],
-            status_url=data["status_url"],
-            created_at=data["created_at"],
-            estimated_count=data["estimated_count"],
-            unique_emails=data.get("unique_emails"),
-            total_rows=data.get("total_rows"),
-            email_column=data.get("email_column"),
-        )
+        data = _ensure_dict(raw, "/verify/file", metadata)
+        with _parsing("/verify/file", metadata):
+            return FileUploadResponse(
+                task_id=data["task_id"],
+                file_name=data["file_name"],
+                file_size=data["file_size"],
+                status=data["status"],
+                message=data["message"],
+                status_url=data["status_url"],
+                created_at=data["created_at"],
+                estimated_count=data["estimated_count"],
+                unique_emails=data.get("unique_emails"),
+                total_rows=data.get("total_rows"),
+                email_column=data.get("email_column"),
+            )
 
     def get_file_task_status(
         self,
@@ -488,9 +611,13 @@ class BillionVerify:
         # Adjust request timeout for long-polling
         custom_timeout = self.timeout + timeout if timeout > 0 else None
 
-        data = self._request("GET", f"/verify/file/{task_id}", params=params if params else None, custom_timeout=custom_timeout)
-
-        return self._parse_file_task_status(data)
+        endpoint = f"/verify/file/{task_id}"
+        raw, metadata = self._request(
+            "GET", endpoint, params=params if params else None, custom_timeout=custom_timeout
+        )
+        data = _ensure_dict(raw, endpoint, metadata)
+        with _parsing(endpoint, metadata):
+            return self._parse_file_task_status(data)
 
     def download_file_results(
         self,
@@ -611,21 +738,17 @@ class BillionVerify:
                 raise ValidationError("Timeout must be between 0 and 300 seconds")
             params["timeout"] = timeout
         custom_timeout = self.timeout + timeout if timeout > 0 else None
-        data = self._request(
-            "GET", f"/verify/file/{task_id}",
+        endpoint = f"/verify/file/{task_id}"
+        raw, metadata = self._request(
+            "GET", endpoint,
             params=params if params else None,
             custom_timeout=custom_timeout,
         )
+        data = _ensure_dict(raw, endpoint, metadata)
         valid_fields = set(BulkTaskStatus.__dataclass_fields__.keys())
         kwargs = {k: v for k, v in data.items() if k in valid_fields}
-        try:
+        with _parsing(endpoint, metadata):
             return BulkTaskStatus(**kwargs)
-        except TypeError as e:
-            raise BillionVerifyError(
-                f"bulk task status response missing required fields: {e}",
-                "INVALID_RESPONSE",
-                0,
-            ) from e
 
     def get_credits(self) -> CreditsResponse:
         """Get current credit balance.
@@ -633,17 +756,18 @@ class BillionVerify:
         Returns:
             CreditsResponse with credit information.
         """
-        data = self._request("GET", "/credits")
-
-        return CreditsResponse(
-            account_id=data["account_id"],
-            api_key_id=data["api_key_id"],
-            api_key_name=data["api_key_name"],
-            credits_balance=data["credits_balance"],
-            credits_consumed=data["credits_consumed"],
-            credits_added=data["credits_added"],
-            last_updated=data["last_updated"],
-        )
+        raw, metadata = self._request("GET", "/credits")
+        data = _ensure_dict(raw, "/credits", metadata)
+        with _parsing("/credits", metadata):
+            return CreditsResponse(
+                account_id=data["account_id"],
+                api_key_id=data["api_key_id"],
+                api_key_name=data["api_key_name"],
+                credits_balance=data["credits_balance"],
+                credits_consumed=data["credits_consumed"],
+                credits_added=data["credits_added"],
+                last_updated=data["last_updated"],
+            )
 
     def create_webhook(
         self,
@@ -661,17 +785,18 @@ class BillionVerify:
         """
         payload: Dict[str, Any] = {"url": url, "events": events}
 
-        data = self._request("POST", "/webhooks", json=payload)
-
-        return Webhook(
-            id=data["id"],
-            url=data["url"],
-            events=data["events"],
-            secret=data.get("secret"),
-            is_active=data["is_active"],
-            created_at=data["created_at"],
-            updated_at=data["updated_at"],
-        )
+        raw, metadata = self._request("POST", "/webhooks", json=payload)
+        data = _ensure_dict(raw, "/webhooks", metadata)
+        with _parsing("/webhooks", metadata):
+            return Webhook(
+                id=data["id"],
+                url=data["url"],
+                events=data["events"],
+                secret=data.get("secret"),
+                is_active=data["is_active"],
+                created_at=data["created_at"],
+                updated_at=data["updated_at"],
+            )
 
     def list_webhooks(self) -> List[Webhook]:
         """List all webhooks.
@@ -679,20 +804,21 @@ class BillionVerify:
         Returns:
             List of Webhook configurations.
         """
-        data = self._request("GET", "/webhooks")
-
-        return [
-            Webhook(
-                id=item["id"],
-                url=item["url"],
-                events=item["events"],
-                secret=item.get("secret"),
-                is_active=item["is_active"],
-                created_at=item["created_at"],
-                updated_at=item["updated_at"],
-            )
-            for item in data
-        ]
+        raw, metadata = self._request("GET", "/webhooks")
+        items = _ensure_list(raw, "/webhooks", metadata)
+        with _parsing("/webhooks", metadata):
+            return [
+                Webhook(
+                    id=item["id"],
+                    url=item["url"],
+                    events=item["events"],
+                    secret=item.get("secret"),
+                    is_active=item["is_active"],
+                    created_at=item["created_at"],
+                    updated_at=item["updated_at"],
+                )
+                for item in items
+            ]
 
     def delete_webhook(self, webhook_id: str) -> None:
         """Delete a webhook.
@@ -803,9 +929,8 @@ class AsyncBillionVerify:
         files: Optional[Dict[str, Any]] = None,
         custom_timeout: Optional[float] = None,
         skip_auth: bool = False,
-        return_metadata: bool = False,
-    ) -> Any:
-        """Make an async HTTP request to the API."""
+    ) -> "tuple[Any, ResponseMetadata]":
+        """Make an async HTTP request to the API. See sync ``_request`` for shape contract."""
         try:
             headers = {}
             if skip_auth:
@@ -852,22 +977,16 @@ class AsyncBillionVerify:
         except httpx.RequestError as e:
             raise BillionVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0)
 
+        metadata = _response_metadata(response)
+
         if response.status_code == 204:
-            metadata = _response_metadata(response)
-            return (None, metadata) if return_metadata else None
+            return None, metadata
 
         if response.is_success:
-            metadata = _response_metadata(response)
-            result = response.json()
-            # Extract data from API wrapper response {success, code, message, data}
-            if isinstance(result, dict) and "data" in result:
-                data = result["data"]
-            else:
-                data = result
-            return (data, metadata) if return_metadata else data
+            return _decode_success_body(response, path, metadata), metadata
 
         return await self._handle_error(
-            response, method, path, json, params, attempt, files, custom_timeout, skip_auth, return_metadata
+            response, method, path, json, params, attempt, files, custom_timeout, skip_auth
         )
 
     async def _request_raw(
@@ -908,22 +1027,12 @@ class AsyncBillionVerify:
         files: Optional[Dict[str, Any]] = None,
         custom_timeout: Optional[float] = None,
         skip_auth: bool = False,
-        return_metadata: bool = False,
-    ) -> Any:
+    ) -> "tuple[Any, ResponseMetadata]":
         """Handle error responses."""
         import asyncio
 
         metadata = _response_metadata(response)
-        try:
-            data = response.json()
-            error = data.get("error", {})
-            message = error.get("message", response.reason_phrase)
-            code = error.get("code", "UNKNOWN_ERROR")
-            details = error.get("details")
-        except Exception:
-            message = response.reason_phrase
-            code = "UNKNOWN_ERROR"
-            details = None
+        message, code, details = _decode_error_envelope(response)
 
         status = response.status_code
 
@@ -941,7 +1050,7 @@ class AsyncBillionVerify:
             if attempt < self.retries:
                 await asyncio.sleep(retry_after or (2**attempt))
                 return await self._request(
-                    method, path, json, params, attempt + 1, files, custom_timeout, skip_auth, return_metadata
+                    method, path, json, params, attempt + 1, files, custom_timeout, skip_auth
                 )
             raise RateLimitError(message, retry_after, response_metadata=metadata)
 
@@ -952,7 +1061,7 @@ class AsyncBillionVerify:
             if attempt < self.retries:
                 await asyncio.sleep(2**attempt)
                 return await self._request(
-                    method, path, json, params, attempt + 1, files, custom_timeout, skip_auth, return_metadata
+                    method, path, json, params, attempt + 1, files, custom_timeout, skip_auth
                 )
 
         raise BillionVerifyError(message, code, status, details, response_metadata=metadata)
@@ -966,15 +1075,20 @@ class AsyncBillionVerify:
                     f"{base_without_version}/health",
                     timeout=self.timeout,
                 )
-                if response.is_success:
-                    data = response.json()
-                    return HealthCheckResponse(
-                        status=data["status"],
-                        version=data.get("version"),
-                    )
-                raise BillionVerifyError("Health check failed", "HEALTH_CHECK_FAILED", response.status_code)
         except httpx.RequestError as e:
             raise BillionVerifyError(f"Network error: {e}", "NETWORK_ERROR", 0)
+
+        metadata = _response_metadata(response)
+        if not response.is_success:
+            raise BillionVerifyError(
+                "Health check failed", "HEALTH_CHECK_FAILED", response.status_code, response_metadata=metadata
+            )
+        data = _ensure_dict(_decode_success_body(response, "/health", metadata), "/health", metadata)
+        with _parsing("/health", metadata):
+            return HealthCheckResponse(
+                status=data["status"],
+                version=data.get("version"),
+            )
 
     async def verify(
         self,
@@ -991,32 +1105,34 @@ class AsyncBillionVerify:
             "include_domain_reputation": include_domain_reputation,
         }
 
-        data, metadata = await self._request("POST", "/verify/single", json=payload, return_metadata=True)
+        raw, metadata = await self._request("POST", "/verify/single", json=payload)
+        data = _ensure_dict(raw, "/verify/single", metadata)
 
-        return VerificationResult(
-            email=data["email"],
-            status=data["status"],
-            score=data["score"],
-            is_deliverable=data["is_deliverable"],
-            is_disposable=data["is_disposable"],
-            is_catchall=data["is_catchall"],
-            is_role=data["is_role"],
-            is_free=data["is_free"],
-            domain=data["domain"],
-            check_smtp=data.get("check_smtp", False),
-            reason=data.get("reason", ""),
-            response_time=data["response_time"],
-            credits_used=data["credits_used"],
-            domain_age=data.get("domain_age"),
-            mx_records=data.get("mx_records", []),
-            domain_reputation=DomainReputation(**data["domain_reputation"]) if data.get("domain_reputation") else None,
-            domain_suggestion=data.get("domain_suggestion"),
-            has_gravatar=data.get("has_gravatar", False),
-            gravatar_url=data.get("gravatar_url"),
-            smtp_response=data.get("smtp_response"),
-            error_message=data.get("error_message"),
-            response_metadata=metadata,
-        )
+        with _parsing("/verify/single", metadata):
+            return VerificationResult(
+                email=data["email"],
+                status=data["status"],
+                score=data["score"],
+                is_deliverable=data["is_deliverable"],
+                is_disposable=data["is_disposable"],
+                is_catchall=data["is_catchall"],
+                is_role=data["is_role"],
+                is_free=data["is_free"],
+                domain=data["domain"],
+                check_smtp=data.get("check_smtp", False),
+                reason=data.get("reason", ""),
+                response_time=data["response_time"],
+                credits_used=data["credits_used"],
+                domain_age=data.get("domain_age"),
+                mx_records=data.get("mx_records", []),
+                domain_reputation=DomainReputation(**data["domain_reputation"]) if data.get("domain_reputation") else None,
+                domain_suggestion=data.get("domain_suggestion"),
+                has_gravatar=data.get("has_gravatar", False),
+                gravatar_url=data.get("gravatar_url"),
+                smtp_response=data.get("smtp_response"),
+                error_message=data.get("error_message"),
+                response_metadata=metadata,
+            )
 
     async def verify_bulk(
         self,
@@ -1029,32 +1145,33 @@ class AsyncBillionVerify:
 
         payload: Dict[str, Any] = {"emails": emails, "check_smtp": check_smtp}
 
-        data = await self._request("POST", "/verify/bulk", json=payload)
+        raw, metadata = await self._request("POST", "/verify/bulk", json=payload)
+        data = _ensure_dict(raw, "/verify/bulk", metadata)
 
-        results = [
-            BulkVerificationResult(
-                email=item["email"],
-                status=item["status"],
-                score=item["score"],
-                is_deliverable=item["is_deliverable"],
-                is_disposable=item["is_disposable"],
-                is_catchall=item["is_catchall"],
-                is_role=item["is_role"],
-                is_free=item["is_free"],
-                domain=item["domain"],
-                reason=item["reason"],
+        with _parsing("/verify/bulk", metadata):
+            results = [
+                BulkVerificationResult(
+                    email=item["email"],
+                    status=item["status"],
+                    score=item["score"],
+                    is_deliverable=item["is_deliverable"],
+                    is_disposable=item["is_disposable"],
+                    is_catchall=item["is_catchall"],
+                    is_role=item["is_role"],
+                    is_free=item["is_free"],
+                    domain=item["domain"],
+                    reason=item["reason"],
+                )
+                for item in data["results"]
+            ]
+            return BulkVerifyResponse(
+                results=results,
+                total_emails=data["total_emails"],
+                valid_emails=data["valid_emails"],
+                invalid_emails=data["invalid_emails"],
+                credits_used=data["credits_used"],
+                process_time=data["process_time"],
             )
-            for item in data["results"]
-        ]
-
-        return BulkVerifyResponse(
-            results=results,
-            total_emails=data["total_emails"],
-            valid_emails=data["valid_emails"],
-            invalid_emails=data["invalid_emails"],
-            credits_used=data["credits_used"],
-            process_time=data["process_time"],
-        )
 
     async def verify_bulk_async(
         self,
@@ -1073,18 +1190,20 @@ class AsyncBillionVerify:
         from .types import BulkAsyncTaskResponse
 
         payload: Dict[str, Any] = {"emails": emails, "check_smtp": check_smtp}
-        data = await self._request("POST", "/verify/bulk", json=payload)
+        raw, metadata = await self._request("POST", "/verify/bulk", json=payload)
+        data = _ensure_dict(raw, "/verify/bulk", metadata)
 
-        return BulkAsyncTaskResponse(
-            task_id=data["task_id"],
-            status=data["status"],
-            message=data.get("message", ""),
-            status_url=data.get("status_url", f"/verify/file/{data['task_id']}"),
-            created_at=data.get("created_at", ""),
-            estimated_count=data.get("estimated_count", len(emails)),
-            unique_emails=data.get("unique_emails"),
-            total_emails=data.get("total_emails"),
-        )
+        with _parsing("/verify/bulk", metadata):
+            return BulkAsyncTaskResponse(
+                task_id=data["task_id"],
+                status=data["status"],
+                message=data.get("message", ""),
+                status_url=data.get("status_url", f"/verify/file/{data['task_id']}"),
+                created_at=data.get("created_at", ""),
+                estimated_count=data.get("estimated_count", len(emails)),
+                unique_emails=data.get("unique_emails"),
+                total_emails=data.get("total_emails"),
+            )
 
     async def upload_file(
         self,
@@ -1105,21 +1224,23 @@ class AsyncBillionVerify:
                 form_data["email_column"] = email_column
             form_data["preserve_original"] = str(preserve_original).lower()
 
-            data = await self._request("POST", "/verify/file", json=form_data, files=files)
+            raw, metadata = await self._request("POST", "/verify/file", json=form_data, files=files)
 
-        return FileUploadResponse(
-            task_id=data["task_id"],
-            file_name=data["file_name"],
-            file_size=data["file_size"],
-            status=data["status"],
-            message=data["message"],
-            status_url=data["status_url"],
-            created_at=data["created_at"],
-            estimated_count=data["estimated_count"],
-            unique_emails=data.get("unique_emails"),
-            total_rows=data.get("total_rows"),
-            email_column=data.get("email_column"),
-        )
+        data = _ensure_dict(raw, "/verify/file", metadata)
+        with _parsing("/verify/file", metadata):
+            return FileUploadResponse(
+                task_id=data["task_id"],
+                file_name=data["file_name"],
+                file_size=data["file_size"],
+                status=data["status"],
+                message=data["message"],
+                status_url=data["status_url"],
+                created_at=data["created_at"],
+                estimated_count=data["estimated_count"],
+                unique_emails=data.get("unique_emails"),
+                total_rows=data.get("total_rows"),
+                email_column=data.get("email_column"),
+            )
 
     async def get_file_task_status(
         self,
@@ -1135,9 +1256,13 @@ class AsyncBillionVerify:
 
         custom_timeout = self.timeout + timeout if timeout > 0 else None
 
-        data = await self._request("GET", f"/verify/file/{task_id}", params=params if params else None, custom_timeout=custom_timeout)
-
-        return BillionVerify._parse_file_task_status(data)
+        endpoint = f"/verify/file/{task_id}"
+        raw, metadata = await self._request(
+            "GET", endpoint, params=params if params else None, custom_timeout=custom_timeout
+        )
+        data = _ensure_dict(raw, endpoint, metadata)
+        with _parsing(endpoint, metadata):
+            return BillionVerify._parse_file_task_status(data)
 
     async def download_file_results(
         self,
@@ -1233,35 +1358,32 @@ class AsyncBillionVerify:
                 raise ValidationError("Timeout must be between 0 and 300 seconds")
             params["timeout"] = timeout
         custom_timeout = self.timeout + timeout if timeout > 0 else None
-        data = await self._request(
-            "GET", f"/verify/file/{task_id}",
+        endpoint = f"/verify/file/{task_id}"
+        raw, metadata = await self._request(
+            "GET", endpoint,
             params=params if params else None,
             custom_timeout=custom_timeout,
         )
+        data = _ensure_dict(raw, endpoint, metadata)
         valid_fields = set(BulkTaskStatus.__dataclass_fields__.keys())
         kwargs = {k: v for k, v in data.items() if k in valid_fields}
-        try:
+        with _parsing(endpoint, metadata):
             return BulkTaskStatus(**kwargs)
-        except TypeError as e:
-            raise BillionVerifyError(
-                f"bulk task status response missing required fields: {e}",
-                "INVALID_RESPONSE",
-                0,
-            ) from e
 
     async def get_credits(self) -> CreditsResponse:
         """Get current credit balance."""
-        data = await self._request("GET", "/credits")
-
-        return CreditsResponse(
-            account_id=data["account_id"],
-            api_key_id=data["api_key_id"],
-            api_key_name=data["api_key_name"],
-            credits_balance=data["credits_balance"],
-            credits_consumed=data["credits_consumed"],
-            credits_added=data["credits_added"],
-            last_updated=data["last_updated"],
-        )
+        raw, metadata = await self._request("GET", "/credits")
+        data = _ensure_dict(raw, "/credits", metadata)
+        with _parsing("/credits", metadata):
+            return CreditsResponse(
+                account_id=data["account_id"],
+                api_key_id=data["api_key_id"],
+                api_key_name=data["api_key_name"],
+                credits_balance=data["credits_balance"],
+                credits_consumed=data["credits_consumed"],
+                credits_added=data["credits_added"],
+                last_updated=data["last_updated"],
+            )
 
     async def create_webhook(
         self,
@@ -1271,34 +1393,36 @@ class AsyncBillionVerify:
         """Create a new webhook."""
         payload: Dict[str, Any] = {"url": url, "events": events}
 
-        data = await self._request("POST", "/webhooks", json=payload)
-
-        return Webhook(
-            id=data["id"],
-            url=data["url"],
-            events=data["events"],
-            secret=data.get("secret"),
-            is_active=data["is_active"],
-            created_at=data["created_at"],
-            updated_at=data["updated_at"],
-        )
+        raw, metadata = await self._request("POST", "/webhooks", json=payload)
+        data = _ensure_dict(raw, "/webhooks", metadata)
+        with _parsing("/webhooks", metadata):
+            return Webhook(
+                id=data["id"],
+                url=data["url"],
+                events=data["events"],
+                secret=data.get("secret"),
+                is_active=data["is_active"],
+                created_at=data["created_at"],
+                updated_at=data["updated_at"],
+            )
 
     async def list_webhooks(self) -> List[Webhook]:
         """List all webhooks."""
-        data = await self._request("GET", "/webhooks")
-
-        return [
-            Webhook(
-                id=item["id"],
-                url=item["url"],
-                events=item["events"],
-                secret=item.get("secret"),
-                is_active=item["is_active"],
-                created_at=item["created_at"],
-                updated_at=item["updated_at"],
-            )
-            for item in data
-        ]
+        raw, metadata = await self._request("GET", "/webhooks")
+        items = _ensure_list(raw, "/webhooks", metadata)
+        with _parsing("/webhooks", metadata):
+            return [
+                Webhook(
+                    id=item["id"],
+                    url=item["url"],
+                    events=item["events"],
+                    secret=item.get("secret"),
+                    is_active=item["is_active"],
+                    created_at=item["created_at"],
+                    updated_at=item["updated_at"],
+                )
+                for item in items
+            ]
 
     async def delete_webhook(self, webhook_id: str) -> None:
         """Delete a webhook."""

@@ -12,6 +12,7 @@ from billionverify import (
     AsyncBillionVerify,
     AuthenticationError,
     BillionVerify,
+    BillionVerifyError,
     InsufficientCreditsError,
     NotFoundError,
     RateLimitError,
@@ -725,3 +726,259 @@ class TestVerifyBulkAsync:
             resp = await c.verify_bulk_async(emails)
         assert resp.task_id == "bulk_b51"
         assert resp.estimated_count == 51
+
+
+class TestEmptyAndMalformedResponses:
+    """API may misbehave: empty bodies, null data, missing fields, garbage payloads.
+
+    None of these should crash the client with a raw KeyError / TypeError /
+    JSONDecodeError. Every case must surface as a typed BillionVerifyError so
+    callers can recover cleanly.
+    """
+
+    @staticmethod
+    def _assert_response_error(exc: BillionVerifyError, expected_code: str) -> None:
+        assert exc.code == expected_code, f"expected {expected_code}, got {exc.code}: {exc.message}"
+        assert exc.response_metadata is not None, "typed error must carry response_metadata"
+
+    # ----- /verify/single -----
+
+    @respx.mock
+    def test_verify_empty_body_raises_empty_response(self):
+        respx.post("https://api.billionverify.com/v1/verify/single").mock(
+            return_value=httpx.Response(200, content=b"", headers={"X-Request-ID": "req-empty"})
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.verify("a@b.com")
+        self._assert_response_error(exc.value, "EMPTY_RESPONSE")
+        assert exc.value.response_metadata.request_id == "req-empty"
+
+    @respx.mock
+    def test_verify_null_data_raises_empty_response(self):
+        respx.post("https://api.billionverify.com/v1/verify/single").mock(
+            return_value=httpx.Response(200, json={"data": None})
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.verify("a@b.com")
+        self._assert_response_error(exc.value, "EMPTY_RESPONSE")
+
+    @respx.mock
+    def test_verify_empty_dict_raises_invalid_response(self):
+        respx.post("https://api.billionverify.com/v1/verify/single").mock(
+            return_value=httpx.Response(200, json={"data": {}})
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.verify("a@b.com")
+        self._assert_response_error(exc.value, "INVALID_RESPONSE")
+
+    @respx.mock
+    def test_verify_data_is_list_raises_invalid_response(self):
+        respx.post("https://api.billionverify.com/v1/verify/single").mock(
+            return_value=httpx.Response(200, json={"data": [1, 2, 3]})
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.verify("a@b.com")
+        self._assert_response_error(exc.value, "INVALID_RESPONSE")
+
+    @respx.mock
+    def test_verify_non_json_body_raises_invalid_response(self):
+        respx.post("https://api.billionverify.com/v1/verify/single").mock(
+            return_value=httpx.Response(200, content=b"<html>oops</html>")
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.verify("a@b.com")
+        self._assert_response_error(exc.value, "INVALID_RESPONSE")
+
+    # ----- /verify/bulk (sync 1-50) -----
+
+    @respx.mock
+    def test_verify_bulk_missing_results_raises_invalid_response(self):
+        respx.post("https://api.billionverify.com/v1/verify/bulk").mock(
+            return_value=httpx.Response(200, json={"data": {"total_emails": 2}})
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.verify_bulk(["a@b.com"])
+        self._assert_response_error(exc.value, "INVALID_RESPONSE")
+
+    @respx.mock
+    def test_verify_bulk_empty_body_raises_empty_response(self):
+        respx.post("https://api.billionverify.com/v1/verify/bulk").mock(
+            return_value=httpx.Response(200, content=b"")
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.verify_bulk(["a@b.com"])
+        self._assert_response_error(exc.value, "EMPTY_RESPONSE")
+
+    # ----- /verify/bulk (async 51-1000) -----
+
+    @respx.mock
+    def test_verify_bulk_async_missing_task_id_raises_invalid_response(self):
+        respx.post("https://api.billionverify.com/v1/verify/bulk").mock(
+            return_value=httpx.Response(202, json={"data": {"status": "processing"}})
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.verify_bulk_async([f"u{i}@x.com" for i in range(60)])
+        self._assert_response_error(exc.value, "INVALID_RESPONSE")
+
+    # ----- /verify/file (upload) -----
+
+    @respx.mock
+    def test_upload_file_missing_task_id_raises_invalid_response(self, tmp_path):
+        respx.post("https://api.billionverify.com/v1/verify/file").mock(
+            return_value=httpx.Response(200, json={"data": {"status": "queued"}})
+        )
+        f = tmp_path / "in.csv"
+        f.write_text("email\na@b.com\n")
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.upload_file(str(f))
+        self._assert_response_error(exc.value, "INVALID_RESPONSE")
+
+    @respx.mock
+    def test_upload_file_null_data_raises_empty_response(self, tmp_path):
+        respx.post("https://api.billionverify.com/v1/verify/file").mock(
+            return_value=httpx.Response(200, json={"data": None})
+        )
+        f = tmp_path / "in.csv"
+        f.write_text("email\na@b.com\n")
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.upload_file(str(f))
+        self._assert_response_error(exc.value, "EMPTY_RESPONSE")
+
+    # ----- /verify/file/:task_id (status) -----
+
+    @respx.mock
+    def test_get_file_task_status_empty_raises_empty_response(self):
+        respx.get("https://api.billionverify.com/v1/verify/file/t1").mock(
+            return_value=httpx.Response(200, json={"data": None})
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.get_file_task_status("t1")
+        self._assert_response_error(exc.value, "EMPTY_RESPONSE")
+
+    @respx.mock
+    def test_get_file_task_status_missing_required_field_raises_invalid_response(self):
+        # Missing task_id + status both required by FileTaskStatus parser
+        respx.get("https://api.billionverify.com/v1/verify/file/t2").mock(
+            return_value=httpx.Response(200, json={"data": {"progress": 50}})
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.get_file_task_status("t2")
+        self._assert_response_error(exc.value, "INVALID_RESPONSE")
+
+    # ----- /verify/file/:task_id (bulk async status) -----
+
+    @respx.mock
+    def test_get_bulk_task_status_missing_required_field_raises_invalid_response(self):
+        # BulkTaskStatus requires task_id + status
+        respx.get("https://api.billionverify.com/v1/verify/file/b1").mock(
+            return_value=httpx.Response(200, json={"data": {"progress": 10}})
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.get_bulk_task_status("b1")
+        self._assert_response_error(exc.value, "INVALID_RESPONSE")
+
+    @respx.mock
+    def test_get_bulk_task_status_empty_dict_raises_invalid_response(self):
+        respx.get("https://api.billionverify.com/v1/verify/file/b2").mock(
+            return_value=httpx.Response(200, json={"data": {}})
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.get_bulk_task_status("b2")
+        self._assert_response_error(exc.value, "INVALID_RESPONSE")
+
+    # ----- /credits -----
+
+    @respx.mock
+    def test_get_credits_empty_body_raises_empty_response(self):
+        respx.get("https://api.billionverify.com/v1/credits").mock(
+            return_value=httpx.Response(200, content=b"")
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.get_credits()
+        self._assert_response_error(exc.value, "EMPTY_RESPONSE")
+
+    @respx.mock
+    def test_get_credits_missing_field_raises_invalid_response(self):
+        respx.get("https://api.billionverify.com/v1/credits").mock(
+            return_value=httpx.Response(200, json={"data": {"account_id": "a"}})
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.get_credits()
+        self._assert_response_error(exc.value, "INVALID_RESPONSE")
+
+    # ----- /webhooks (list — expects array) -----
+
+    @respx.mock
+    def test_list_webhooks_wrong_shape_raises_invalid_response(self):
+        respx.get("https://api.billionverify.com/v1/webhooks").mock(
+            return_value=httpx.Response(200, json={"data": {"unexpected": "object"}})
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.list_webhooks()
+        self._assert_response_error(exc.value, "INVALID_RESPONSE")
+
+    @respx.mock
+    def test_create_webhook_missing_field_raises_invalid_response(self):
+        respx.post("https://api.billionverify.com/v1/webhooks").mock(
+            return_value=httpx.Response(200, json={"data": {"url": "https://e/h"}})
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.create_webhook("https://e/h", ["file.completed"])
+        self._assert_response_error(exc.value, "INVALID_RESPONSE")
+
+    # ----- error envelope robustness -----
+
+    @respx.mock
+    def test_error_response_with_empty_body_still_raises_typed_error(self):
+        respx.post("https://api.billionverify.com/v1/verify/single").mock(
+            return_value=httpx.Response(500, content=b"")
+        )
+        # retries=1 prevents exponential backoff during the test
+        with BillionVerify(api_key="k", retries=1) as c, pytest.raises(BillionVerifyError) as exc:
+            c.verify("a@b.com")
+        assert exc.value.status_code == 500
+        assert exc.value.response_metadata is not None
+
+    @respx.mock
+    def test_error_response_with_non_json_body_still_raises_typed_error(self):
+        respx.post("https://api.billionverify.com/v1/verify/single").mock(
+            return_value=httpx.Response(503, content=b"<html>gateway</html>")
+        )
+        with BillionVerify(api_key="k", retries=1) as c, pytest.raises(BillionVerifyError) as exc:
+            c.verify("a@b.com")
+        assert exc.value.status_code == 503
+
+    # ----- async coverage (one per category) -----
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_verify_empty_body_raises_empty_response(self):
+        respx.post("https://api.billionverify.com/v1/verify/single").mock(
+            return_value=httpx.Response(200, content=b"")
+        )
+        async with AsyncBillionVerify(api_key="k") as c:
+            with pytest.raises(BillionVerifyError) as exc:
+                await c.verify("a@b.com")
+        self._assert_response_error(exc.value, "EMPTY_RESPONSE")
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_verify_bulk_async_missing_task_id(self):
+        respx.post("https://api.billionverify.com/v1/verify/bulk").mock(
+            return_value=httpx.Response(202, json={"data": {"status": "processing"}})
+        )
+        async with AsyncBillionVerify(api_key="k") as c:
+            with pytest.raises(BillionVerifyError) as exc:
+                await c.verify_bulk_async([f"u{i}@x.com" for i in range(60)])
+        self._assert_response_error(exc.value, "INVALID_RESPONSE")
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_get_bulk_task_status_empty_raises_empty_response(self):
+        respx.get("https://api.billionverify.com/v1/verify/file/b9").mock(
+            return_value=httpx.Response(200, json={"data": None})
+        )
+        async with AsyncBillionVerify(api_key="k") as c:
+            with pytest.raises(BillionVerifyError) as exc:
+                await c.get_bulk_task_status("b9")
+        self._assert_response_error(exc.value, "EMPTY_RESPONSE")
