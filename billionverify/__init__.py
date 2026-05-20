@@ -19,13 +19,14 @@ from .types import (
     FileUploadResponse,
     HealthCheckResponse,
     JobStatus,
+    ResponseMetadata,
     VerificationResult,
     VerificationStatus,
     Webhook,
     WebhookEvent,
 )
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 __all__ = [
     # Clients
@@ -34,6 +35,7 @@ __all__ = [
     # Types
     "VerificationResult",
     "VerificationStatus",
+    "ResponseMetadata",
     "BulkVerificationResult",
     "BulkVerifyResponse",
     "FileUploadResponse",

@@ -46,6 +46,8 @@ Uses the `/verify/single` endpoint:
 result = client.verify(
     email="user@example.com",
     check_smtp=True,  # Optional: Perform SMTP verification (default: True)
+    force_refresh=False,  # Optional: Bypass cache and force live verification (default: False)
+    include_domain_reputation=False,  # Optional: Include domain reputation details (default: False)
 )
 
 # Flat response structure
@@ -62,6 +64,10 @@ print(result.reason)             # 'Valid email address'
 print(result.check_smtp)         # True (whether SMTP was performed)
 print(result.domain_suggestion)  # None or suggested domain correction
 print(result.credits_used)       # 1
+
+# Response metadata for audit logs and throttled runners
+print(result.response_metadata.request_id)             # Server X-Request-ID
+print(result.response_metadata.rate_limit_remaining)   # Remaining requests in current window
 ```
 
 ## Bulk Email Verification (Synchronous)
@@ -213,6 +219,7 @@ is_valid = BillionVerify.verify_webhook_signature(
 ```python
 from billionverify import (
     BillionVerify,
+    BillionVerifyError,
     AuthenticationError,
     RateLimitError,
     ValidationError,
@@ -227,6 +234,7 @@ except AuthenticationError:
     print("Invalid API key")
 except RateLimitError as e:
     print(f"Rate limited. Retry after {e.retry_after} seconds")
+    print(f"Request ID: {e.response_metadata.request_id}")
 except ValidationError as e:
     print(f"Invalid input: {e.message}")
 except InsufficientCreditsError:
@@ -235,6 +243,35 @@ except NotFoundError:
     print("Resource not found")
 except TimeoutError:
     print("Request timed out")
+except BillionVerifyError as e:
+    # Catch-all for anything else, including the response-shape codes below.
+    print(f"{e.code}: {e.message}")
+```
+
+### Malformed or empty server responses
+
+The SDK never lets a malformed API reply leak out as a raw `KeyError`,
+`TypeError`, or `json.JSONDecodeError`. Empty bodies, `null` payloads,
+non-JSON content, and responses missing required fields are all surfaced
+as a typed `BillionVerifyError` with `response_metadata` populated, so you
+can recover and log the request ID:
+
+| `error.code`       | When it fires                                              |
+| ------------------ | ---------------------------------------------------------- |
+| `EMPTY_RESPONSE`   | 2xx with no body, or envelope `{"data": null}`             |
+| `INVALID_RESPONSE` | Non-JSON body, wrong top-level shape, or missing fields    |
+
+```python
+try:
+    result = client.verify("user@example.com")
+except BillionVerifyError as e:
+    if e.code in ("EMPTY_RESPONSE", "INVALID_RESPONSE"):
+        log.error("bad upstream reply", extra={
+            "request_id": e.response_metadata.request_id,
+            "status": e.response_metadata.status_code,
+            "details": e.details,
+        })
+    raise
 ```
 
 ## Context Manager

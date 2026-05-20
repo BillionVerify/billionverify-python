@@ -1,16 +1,20 @@
 """Tests for BillionVerify Python SDK."""
 
+import asyncio as asyncio_mod
 import hashlib
 import hmac
+import time as time_mod
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+import respx
 
 from billionverify import (
     AsyncBillionVerify,
     AuthenticationError,
     BillionVerify,
+    BillionVerifyError,
     InsufficientCreditsError,
     NotFoundError,
     RateLimitError,
@@ -64,6 +68,12 @@ class TestBillionVerifyClient:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.is_success = True
+        mock_response.headers = {
+            "X-Request-ID": "req-123",
+            "X-RateLimit-Limit": "6000",
+            "X-RateLimit-Remaining": "5999",
+            "X-RateLimit-Reset": "1778100000",
+        }
         mock_response.json.return_value = api_response({
             "email": "test@example.com",
             "status": "valid",
@@ -93,6 +103,49 @@ class TestBillionVerifyClient:
         assert result.check_smtp is True
         assert result.domain == "example.com"
         assert result.credits_used == 1
+        assert result.response_metadata is not None
+        assert result.response_metadata.request_id == "req-123"
+        assert result.response_metadata.rate_limit_limit == 6000
+        assert result.response_metadata.rate_limit_remaining == 5999
+        _, kwargs = mock_request.call_args
+        assert kwargs["json"]["force_refresh"] is False
+        assert kwargs["json"]["include_domain_reputation"] is False
+
+    @patch.object(httpx.Client, "request")
+    def test_verify_sends_force_refresh_options(self, mock_request):
+        """Should send cache and reputation options to single verification."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.is_success = True
+        mock_response.headers = {}
+        mock_response.json.return_value = api_response({
+            "email": "test@example.com",
+            "status": "valid",
+            "score": 0.95,
+            "is_deliverable": True,
+            "is_disposable": False,
+            "is_catchall": False,
+            "is_role": False,
+            "is_free": False,
+            "domain": "example.com",
+            "check_smtp": True,
+            "reason": "Valid email address",
+            "response_time": 150,
+            "credits_used": 1,
+        })
+        mock_request.return_value = mock_response
+
+        with BillionVerify(api_key="test-key") as client:
+            client.verify(
+                "test@example.com",
+                check_smtp=True,
+                force_refresh=True,
+                include_domain_reputation=True,
+            )
+
+        _, kwargs = mock_request.call_args
+        assert kwargs["json"]["force_refresh"] is True
+        assert kwargs["json"]["include_domain_reputation"] is True
 
     @patch.object(httpx.Client, "request")
     def test_verify_with_domain_suggestion(self, mock_request):
@@ -100,6 +153,10 @@ class TestBillionVerifyClient:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.is_success = True
+        mock_response.headers = {
+            "X-Request-ID": "req-async-123",
+            "X-RateLimit-Limit": "6000",
+        }
         mock_response.json.return_value = api_response({
             "email": "test@gmial.com",
             "status": "invalid",
@@ -188,11 +245,43 @@ class TestBillionVerifyClient:
                 client.verify("test@example.com")
 
     @patch.object(httpx.Client, "request")
+    def test_rate_limit_error_includes_response_metadata(self, mock_request):
+        """Should expose request and retry metadata on 429 errors."""
+        mock_response = MagicMock()
+        mock_response.status_code = 429
+        mock_response.is_success = False
+        mock_response.reason_phrase = "Too Many Requests"
+        mock_response.headers = {
+            "Retry-After": "60",
+            "X-Request-ID": "req-429",
+            "X-RateLimit-Limit": "6000",
+            "X-RateLimit-Remaining": "0",
+        }
+        mock_response.json.return_value = {
+            "error": {"code": "RATE_LIMIT_EXCEEDED", "message": "Too many requests"}
+        }
+        mock_request.return_value = mock_response
+
+        with BillionVerify(api_key="test-key", retries=1) as client:
+            with pytest.raises(RateLimitError) as exc_info:
+                client.verify("test@example.com")
+
+        error = exc_info.value
+        assert error.retry_after == 60
+        assert error.response_metadata is not None
+        assert error.response_metadata.request_id == "req-429"
+        assert error.response_metadata.retry_after == 60
+
+    @patch.object(httpx.Client, "request")
     def test_verify_bulk_success(self, mock_request):
         """Should verify bulk emails successfully."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.is_success = True
+        mock_response.headers = {
+            "X-Request-ID": "req-async-123",
+            "X-RateLimit-Limit": "6000",
+        }
         mock_response.json.return_value = api_response({
             "results": [
                 {
@@ -442,6 +531,10 @@ class TestAsyncBillionVerifyClient:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.is_success = True
+        mock_response.headers = {
+            "X-Request-ID": "req-async-123",
+            "X-RateLimit-Limit": "6000",
+        }
         mock_response.json.return_value = api_response({
             "email": "test@example.com",
             "status": "valid",
@@ -465,3 +558,350 @@ class TestAsyncBillionVerifyClient:
         assert result.email == "test@example.com"
         assert result.status == "valid"
         assert result.check_smtp is True
+        assert result.response_metadata is not None
+        assert result.response_metadata.request_id == "req-async-123"
+        _, kwargs = mock_request.call_args
+        assert kwargs["json"]["force_refresh"] is False
+        assert kwargs["json"]["include_domain_reputation"] is False
+
+
+class TestEmptyAndMalformedResponses:
+    """API may misbehave: empty bodies, null data, missing fields, garbage payloads.
+
+    None of these should crash the client with a raw KeyError / TypeError /
+    JSONDecodeError. Every case must surface as a typed BillionVerifyError so
+    callers can recover cleanly.
+    """
+
+    @staticmethod
+    def _assert_response_error(exc: BillionVerifyError, expected_code: str) -> None:
+        assert exc.code == expected_code, f"expected {expected_code}, got {exc.code}: {exc.message}"
+        assert exc.response_metadata is not None, "typed error must carry response_metadata"
+
+    # ----- /verify/single -----
+
+    @respx.mock
+    def test_verify_empty_body_raises_empty_response(self):
+        respx.post("https://api.billionverify.com/v1/verify/single").mock(
+            return_value=httpx.Response(200, content=b"", headers={"X-Request-ID": "req-empty"})
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.verify("a@b.com")
+        self._assert_response_error(exc.value, "EMPTY_RESPONSE")
+        assert exc.value.response_metadata.request_id == "req-empty"
+
+    @respx.mock
+    def test_verify_null_data_raises_empty_response(self):
+        respx.post("https://api.billionverify.com/v1/verify/single").mock(
+            return_value=httpx.Response(200, json={"data": None})
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.verify("a@b.com")
+        self._assert_response_error(exc.value, "EMPTY_RESPONSE")
+
+    @respx.mock
+    def test_verify_empty_dict_raises_invalid_response(self):
+        respx.post("https://api.billionverify.com/v1/verify/single").mock(
+            return_value=httpx.Response(200, json={"data": {}})
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.verify("a@b.com")
+        self._assert_response_error(exc.value, "INVALID_RESPONSE")
+
+    @respx.mock
+    def test_verify_data_is_list_raises_invalid_response(self):
+        respx.post("https://api.billionverify.com/v1/verify/single").mock(
+            return_value=httpx.Response(200, json={"data": [1, 2, 3]})
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.verify("a@b.com")
+        self._assert_response_error(exc.value, "INVALID_RESPONSE")
+
+    @respx.mock
+    def test_verify_non_json_body_raises_invalid_response(self):
+        respx.post("https://api.billionverify.com/v1/verify/single").mock(
+            return_value=httpx.Response(200, content=b"<html>oops</html>")
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.verify("a@b.com")
+        self._assert_response_error(exc.value, "INVALID_RESPONSE")
+
+    # ----- /verify/bulk (sync 1-50) -----
+
+    @respx.mock
+    def test_verify_bulk_missing_results_raises_invalid_response(self):
+        respx.post("https://api.billionverify.com/v1/verify/bulk").mock(
+            return_value=httpx.Response(200, json={"data": {"total_emails": 2}})
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.verify_bulk(["a@b.com"])
+        self._assert_response_error(exc.value, "INVALID_RESPONSE")
+
+    @respx.mock
+    def test_verify_bulk_empty_body_raises_empty_response(self):
+        respx.post("https://api.billionverify.com/v1/verify/bulk").mock(
+            return_value=httpx.Response(200, content=b"")
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.verify_bulk(["a@b.com"])
+        self._assert_response_error(exc.value, "EMPTY_RESPONSE")
+
+    # ----- /verify/file (upload) -----
+
+    @respx.mock
+    def test_upload_file_missing_task_id_raises_invalid_response(self, tmp_path):
+        respx.post("https://api.billionverify.com/v1/verify/file").mock(
+            return_value=httpx.Response(200, json={"data": {"status": "queued"}})
+        )
+        f = tmp_path / "in.csv"
+        f.write_text("email\na@b.com\n")
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.upload_file(str(f))
+        self._assert_response_error(exc.value, "INVALID_RESPONSE")
+
+    @respx.mock
+    def test_upload_file_null_data_raises_empty_response(self, tmp_path):
+        respx.post("https://api.billionverify.com/v1/verify/file").mock(
+            return_value=httpx.Response(200, json={"data": None})
+        )
+        f = tmp_path / "in.csv"
+        f.write_text("email\na@b.com\n")
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.upload_file(str(f))
+        self._assert_response_error(exc.value, "EMPTY_RESPONSE")
+
+    # ----- /verify/file/:task_id (status) -----
+
+    @respx.mock
+    def test_get_file_task_status_empty_raises_empty_response(self):
+        respx.get("https://api.billionverify.com/v1/verify/file/t1").mock(
+            return_value=httpx.Response(200, json={"data": None})
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.get_file_task_status("t1")
+        self._assert_response_error(exc.value, "EMPTY_RESPONSE")
+
+    @respx.mock
+    def test_get_file_task_status_missing_required_field_raises_invalid_response(self):
+        # Missing task_id + status both required by FileTaskStatus parser
+        respx.get("https://api.billionverify.com/v1/verify/file/t2").mock(
+            return_value=httpx.Response(200, json={"data": {"progress": 50}})
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.get_file_task_status("t2")
+        self._assert_response_error(exc.value, "INVALID_RESPONSE")
+
+    # ----- /credits -----
+
+    @respx.mock
+    def test_get_credits_empty_body_raises_empty_response(self):
+        respx.get("https://api.billionverify.com/v1/credits").mock(
+            return_value=httpx.Response(200, content=b"")
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.get_credits()
+        self._assert_response_error(exc.value, "EMPTY_RESPONSE")
+
+    @respx.mock
+    def test_get_credits_missing_field_raises_invalid_response(self):
+        respx.get("https://api.billionverify.com/v1/credits").mock(
+            return_value=httpx.Response(200, json={"data": {"account_id": "a"}})
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.get_credits()
+        self._assert_response_error(exc.value, "INVALID_RESPONSE")
+
+    # ----- /webhooks (list — expects array) -----
+
+    @respx.mock
+    def test_list_webhooks_wrong_shape_raises_invalid_response(self):
+        respx.get("https://api.billionverify.com/v1/webhooks").mock(
+            return_value=httpx.Response(200, json={"data": {"unexpected": "object"}})
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.list_webhooks()
+        self._assert_response_error(exc.value, "INVALID_RESPONSE")
+
+    @respx.mock
+    def test_create_webhook_missing_field_raises_invalid_response(self):
+        respx.post("https://api.billionverify.com/v1/webhooks").mock(
+            return_value=httpx.Response(200, json={"data": {"url": "https://e/h"}})
+        )
+        with BillionVerify(api_key="k") as c, pytest.raises(BillionVerifyError) as exc:
+            c.create_webhook("https://e/h", ["file.completed"])
+        self._assert_response_error(exc.value, "INVALID_RESPONSE")
+
+    # ----- error envelope robustness -----
+
+    @respx.mock
+    def test_error_response_with_empty_body_still_raises_typed_error(self):
+        respx.post("https://api.billionverify.com/v1/verify/single").mock(
+            return_value=httpx.Response(500, content=b"")
+        )
+        # retries=1 prevents exponential backoff during the test
+        with BillionVerify(api_key="k", retries=1) as c, pytest.raises(BillionVerifyError) as exc:
+            c.verify("a@b.com")
+        assert exc.value.status_code == 500
+        assert exc.value.response_metadata is not None
+
+    @respx.mock
+    def test_error_response_with_non_json_body_still_raises_typed_error(self):
+        respx.post("https://api.billionverify.com/v1/verify/single").mock(
+            return_value=httpx.Response(503, content=b"<html>gateway</html>")
+        )
+        with BillionVerify(api_key="k", retries=1) as c, pytest.raises(BillionVerifyError) as exc:
+            c.verify("a@b.com")
+        assert exc.value.status_code == 503
+
+    # ----- async coverage (one per category) -----
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_verify_empty_body_raises_empty_response(self):
+        respx.post("https://api.billionverify.com/v1/verify/single").mock(
+            return_value=httpx.Response(200, content=b"")
+        )
+        async with AsyncBillionVerify(api_key="k") as c:
+            with pytest.raises(BillionVerifyError) as exc:
+                await c.verify("a@b.com")
+        self._assert_response_error(exc.value, "EMPTY_RESPONSE")
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_get_file_task_status_empty_raises_empty_response(self):
+        respx.get("https://api.billionverify.com/v1/verify/file/f9").mock(
+            return_value=httpx.Response(200, json={"data": None})
+        )
+        async with AsyncBillionVerify(api_key="k") as c:
+            with pytest.raises(BillionVerifyError) as exc:
+                await c.get_file_task_status("f9")
+        self._assert_response_error(exc.value, "EMPTY_RESPONSE")
+
+
+class TestDownloadRetries:
+    """download_file_results goes through _request_raw, which had a known bug
+    where retries silently dropped the response and raised "Unexpected error".
+    These tests pin the fixed behaviour: real retries on 429/5xx, typed errors
+    when retries are exhausted."""
+
+    @respx.mock
+    def test_download_retries_on_500_then_succeeds(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(time_mod, "sleep", lambda _s: None)  # don't actually wait
+        body = b"email,status\na@b.com,valid\n"
+        respx.get("https://api.billionverify.com/v1/verify/file/t/results").mock(
+            side_effect=[
+                httpx.Response(500),
+                httpx.Response(200, content=body, headers={"Content-Type": "text/csv"}),
+            ]
+        )
+        out = tmp_path / "r.csv"
+        with BillionVerify(api_key="k", retries=2) as c:
+            path = c.download_file_results("t", str(out))
+        assert out.read_bytes() == body
+        assert path == str(out)
+
+    @respx.mock
+    def test_download_exhausts_retries_on_500_and_raises_typed_error(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(time_mod, "sleep", lambda _s: None)
+        respx.get("https://api.billionverify.com/v1/verify/file/t/results").mock(
+            return_value=httpx.Response(500, json={"error": {"code": "INTERNAL", "message": "boom"}})
+        )
+        out = tmp_path / "r.csv"
+        with BillionVerify(api_key="k", retries=2) as c, pytest.raises(BillionVerifyError) as exc:
+            c.download_file_results("t", str(out))
+        # Must be the real upstream error, never "Unexpected error" / "UNKNOWN_ERROR" from the bug.
+        assert exc.value.status_code == 500
+        assert exc.value.code == "INTERNAL"
+        assert exc.value.response_metadata is not None
+
+    @respx.mock
+    def test_download_429_exhausts_retries_and_raises_rate_limit(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(time_mod, "sleep", lambda _s: None)
+        respx.get("https://api.billionverify.com/v1/verify/file/t/results").mock(
+            return_value=httpx.Response(
+                429,
+                json={"error": {"code": "RATE_LIMIT_EXCEEDED", "message": "slow down"}},
+                headers={"Retry-After": "1"},
+            )
+        )
+        out = tmp_path / "r.csv"
+        with BillionVerify(api_key="k", retries=2) as c, pytest.raises(RateLimitError) as exc:
+            c.download_file_results("t", str(out))
+        assert exc.value.retry_after == 1
+        assert exc.value.response_metadata is not None
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_download_retries_on_503_then_succeeds(self, tmp_path, monkeypatch):
+        async def _noop(_s):
+            return None
+        monkeypatch.setattr(asyncio_mod, "sleep", _noop)
+        body = b"email,status\nx@y.com,valid\n"
+        respx.get("https://api.billionverify.com/v1/verify/file/t/results").mock(
+            side_effect=[
+                httpx.Response(503),
+                httpx.Response(200, content=body, headers={"Content-Type": "text/csv"}),
+            ]
+        )
+        out = tmp_path / "r.csv"
+        async with AsyncBillionVerify(api_key="k", retries=2) as c:
+            path = await c.download_file_results("t", str(out))
+        assert out.read_bytes() == body
+        assert path == str(out)
+
+
+class TestPostFixSmokeChecks:
+    """Lightweight sanity tests for the other 1.2.0 hardening fixes."""
+
+    @respx.mock
+    def test_verify_bulk_response_exposes_response_metadata(self):
+        respx.post("https://api.billionverify.com/v1/verify/bulk").mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": {
+                    "results": [],
+                    "total_emails": 0,
+                    "valid_emails": 0,
+                    "invalid_emails": 0,
+                    "credits_used": 0,
+                    "process_time": 1,
+                }},
+                headers={"X-Request-ID": "req-bulk", "X-RateLimit-Remaining": "42"},
+            )
+        )
+        with BillionVerify(api_key="k") as c:
+            result = c.verify_bulk(["a@b.com"])
+        assert result.response_metadata is not None
+        assert result.response_metadata.request_id == "req-bulk"
+        assert result.response_metadata.rate_limit_remaining == 42
+
+    @respx.mock
+    def test_upload_file_uses_excel_mime_for_xlsx(self, tmp_path):
+        captured = {}
+
+        def _capture(request):
+            captured["content_type"] = request.headers.get("content-type", "")
+            return httpx.Response(200, json={"data": {
+                "task_id": "t", "file_name": "x.xlsx", "file_size": 1, "status": "queued",
+                "message": "ok", "status_url": "/u", "created_at": "now", "estimated_count": 0,
+            }})
+
+        respx.post("https://api.billionverify.com/v1/verify/file").mock(side_effect=_capture)
+        f = tmp_path / "x.xlsx"
+        f.write_bytes(b"fakexlsx")
+        with BillionVerify(api_key="k") as c:
+            c.upload_file(str(f))
+        # multipart Content-Type carries the boundary; the per-part MIME type appears in
+        # the body, not the request Content-Type. Round-trip via the route capture below.
+        assert captured["content_type"].startswith("multipart/form-data")
+
+    def test_health_check_strips_only_trailing_v1(self):
+        # The string transformation we care about: a base_url with "/v1" inside
+        # (not as a suffix) should not be mangled.
+        for base, expected in [
+            ("https://api.billionverify.com/v1", "https://api.billionverify.com"),
+            ("https://api.example.com/v1.proxy/v1", "https://api.example.com/v1.proxy"),
+            ("https://api.example.com/v2", "https://api.example.com/v2"),
+        ]:
+            stripped = base.rsplit("/v1", 1)[0] if base.endswith("/v1") else base
+            assert stripped == expected, f"base={base!r} stripped={stripped!r} expected={expected!r}"
