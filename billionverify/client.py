@@ -37,7 +37,10 @@ from .types import (
 DEFAULT_BASE_URL = "https://api.billionverify.com/v1"
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_RETRIES = 3
-SDK_VERSION = "1.2.0"
+# HTTP connection-pool ceiling. This caps how many requests can be in flight
+# at once; the caller controls it via the `max_connections` client argument.
+DEFAULT_MAX_CONNECTIONS = 100
+SDK_VERSION = "1.2.1"
 
 
 def _parse_str_header(value: Any) -> Optional[str]:
@@ -218,6 +221,7 @@ class BillionVerify:
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = DEFAULT_TIMEOUT,
         retries: int = DEFAULT_RETRIES,
+        max_connections: int = DEFAULT_MAX_CONNECTIONS,
     ) -> None:
         """Initialize the BillionVerify client.
 
@@ -226,6 +230,10 @@ class BillionVerify:
             base_url: API base URL (default: https://api.billionverify.com/v1).
             timeout: Request timeout in seconds (default: 30).
             retries: Number of retries for failed requests (default: 3).
+            max_connections: Max concurrent HTTP connections in the pool
+                (default: 100). The caller owns its concurrency ceiling; raise
+                this to verify more emails in parallel without requests
+                queueing inside the HTTP client.
         """
         if not api_key:
             raise AuthenticationError("API key is required")
@@ -234,9 +242,14 @@ class BillionVerify:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.retries = retries
+        self.max_connections = max_connections
         self._client = httpx.Client(
             base_url=self.base_url,
             timeout=self.timeout,
+            limits=httpx.Limits(
+                max_connections=max_connections,
+                max_keepalive_connections=max_connections,
+            ),
             headers={
                 "BV-API-KEY": self.api_key,
                 "Content-Type": "application/json",
@@ -826,8 +839,20 @@ class AsyncBillionVerify:
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = DEFAULT_TIMEOUT,
         retries: int = DEFAULT_RETRIES,
+        max_connections: int = DEFAULT_MAX_CONNECTIONS,
     ) -> None:
-        """Initialize the async BillionVerify client."""
+        """Initialize the async BillionVerify client.
+
+        Args:
+            api_key: Your BillionVerify API key.
+            base_url: API base URL (default: https://api.billionverify.com/v1).
+            timeout: Request timeout in seconds (default: 30).
+            retries: Number of retries for failed requests (default: 3).
+            max_connections: Max concurrent HTTP connections in the pool
+                (default: 100). The caller owns its concurrency ceiling; raise
+                this to verify more emails in parallel without requests
+                queueing inside the HTTP client.
+        """
         if not api_key:
             raise AuthenticationError("API key is required")
 
@@ -835,9 +860,14 @@ class AsyncBillionVerify:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.retries = retries
+        self.max_connections = max_connections
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=self.timeout,
+            limits=httpx.Limits(
+                max_connections=max_connections,
+                max_keepalive_connections=max_connections,
+            ),
             headers={
                 "BV-API-KEY": self.api_key,
                 "Content-Type": "application/json",
