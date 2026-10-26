@@ -40,7 +40,7 @@ DEFAULT_RETRIES = 3
 # HTTP connection-pool ceiling. This caps how many requests can be in flight
 # at once; the caller controls it via the `max_connections` client argument.
 DEFAULT_MAX_CONNECTIONS = 100
-SDK_VERSION = "1.2.1"
+SDK_VERSION = "1.2.2"
 
 
 def _parse_str_header(value: Any) -> Optional[str]:
@@ -480,7 +480,7 @@ class BillionVerify:
                 credits_used=data["credits_used"],
                 domain_age=data.get("domain_age"),
                 mx_records=data.get("mx_records", []),
-                domain_reputation=DomainReputation(**data["domain_reputation"]) if data.get("domain_reputation") else None,
+                domain_reputation=DomainReputation.from_dict(data["domain_reputation"]) if isinstance(data.get("domain_reputation"), dict) else None,
                 domain_suggestion=data.get("domain_suggestion"),
                 has_gravatar=data.get("has_gravatar", False),
                 gravatar_url=data.get("gravatar_url"),
@@ -1074,7 +1074,7 @@ class AsyncBillionVerify:
                 credits_used=data["credits_used"],
                 domain_age=data.get("domain_age"),
                 mx_records=data.get("mx_records", []),
-                domain_reputation=DomainReputation(**data["domain_reputation"]) if data.get("domain_reputation") else None,
+                domain_reputation=DomainReputation.from_dict(data["domain_reputation"]) if isinstance(data.get("domain_reputation"), dict) else None,
                 domain_suggestion=data.get("domain_suggestion"),
                 has_gravatar=data.get("has_gravatar", False),
                 gravatar_url=data.get("gravatar_url"),

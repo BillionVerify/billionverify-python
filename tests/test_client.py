@@ -905,3 +905,79 @@ class TestPostFixSmokeChecks:
         ]:
             stripped = base.rsplit("/v1", 1)[0] if base.endswith("/v1") else base
             assert stripped == expected, f"base={base!r} stripped={stripped!r} expected={expected!r}"
+
+
+def _single_with_reputation(reputation):
+    return {"data": {
+        "email": "info@example.com",
+        "status": "role",
+        "score": 0.6,
+        "is_deliverable": True,
+        "is_disposable": False,
+        "is_catchall": False,
+        "is_role": True,
+        "is_free": False,
+        "domain": "example.com",
+        "check_smtp": True,
+        "reason": "role_account",
+        "response_time": 120,
+        "credits_used": 1,
+        "domain_reputation": reputation,
+    }}
+
+
+class TestDomainReputationForwardCompat:
+    """domain_reputation must not crash when the API adds fields (1.2.1 raised
+    TypeError: __init__() got an unexpected keyword argument 'advisory')."""
+
+    REPUTATION = {
+        "mx_ip": "203.0.113.10",
+        "is_listed": False,
+        "blacklists": [],
+        "advisory": ["dnsbl.spfbl.net"],
+        "checked": True,
+        "drop_listed": True,
+        "drop_cidr": "203.0.113.0/24",
+        "drop_sblid": "SBL123",
+        "some_future_field": {"x": 1},
+    }
+
+    @respx.mock
+    def test_verify_accepts_new_and_unknown_reputation_fields(self):
+        respx.post("https://api.billionverify.com/v1/verify/single").mock(
+            return_value=httpx.Response(200, json=_single_with_reputation(self.REPUTATION))
+        )
+        with BillionVerify(api_key="k") as c:
+            r = c.verify("info@example.com", include_domain_reputation=True)
+        rep = r.domain_reputation
+        assert rep.mx_ip == "203.0.113.10"
+        assert rep.is_listed is False
+        assert rep.advisory == ["dnsbl.spfbl.net"]
+        assert rep.drop_listed is True
+        assert rep.drop_cidr == "203.0.113.0/24"
+        assert rep.drop_sblid == "SBL123"
+
+    @respx.mock
+    def test_verify_accepts_sparse_reputation(self):
+        # mx_ip is omitted when empty and blacklists may be null.
+        respx.post("https://api.billionverify.com/v1/verify/single").mock(
+            return_value=httpx.Response(200, json=_single_with_reputation(
+                {"is_listed": False, "blacklists": None, "checked": False}
+            ))
+        )
+        with BillionVerify(api_key="k") as c:
+            r = c.verify("info@example.com", include_domain_reputation=True)
+        assert r.domain_reputation.mx_ip == ""
+        assert r.domain_reputation.blacklists == []
+        assert r.domain_reputation.advisory == []
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_async_verify_accepts_new_reputation_fields(self):
+        respx.post("https://api.billionverify.com/v1/verify/single").mock(
+            return_value=httpx.Response(200, json=_single_with_reputation(self.REPUTATION))
+        )
+        async with AsyncBillionVerify(api_key="k") as c:
+            r = await c.verify("info@example.com", include_domain_reputation=True)
+        assert r.domain_reputation.advisory == ["dnsbl.spfbl.net"]
+        assert r.domain_reputation.drop_listed is True

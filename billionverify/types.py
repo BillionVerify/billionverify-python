@@ -1,7 +1,7 @@
 """BillionVerify Python SDK Types."""
 
-from dataclasses import dataclass, field
-from typing import List, Literal, Optional
+from dataclasses import dataclass, field, fields
+from typing import Any, Dict, List, Literal, Optional
 
 
 VerificationStatus = Literal["valid", "invalid", "unknown", "risky", "disposable", "catchall", "role"]
@@ -23,12 +23,28 @@ class ResponseMetadata:
 
 @dataclass
 class DomainReputation:
-    """Domain reputation details."""
+    """Domain reputation details.
 
-    mx_ip: str
-    is_listed: bool
-    blacklists: List[str]
-    checked: bool
+    Built with :meth:`from_dict`, which ignores fields this SDK version does not
+    know, so the API can add fields without breaking older SDK releases.
+    """
+
+    mx_ip: str = ""
+    is_listed: bool = False
+    blacklists: List[str] = field(default_factory=list)
+    checked: bool = False
+    # Graded-list hits that do not count as listed (e.g. grey / low reputation).
+    advisory: List[str] = field(default_factory=list)
+    # Spamhaus DROP match for the MX IP.
+    drop_listed: bool = False
+    drop_cidr: Optional[str] = None
+    drop_sblid: Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "DomainReputation":
+        known = {f.name for f in fields(cls)}
+        kwargs = {k: v for k, v in data.items() if k in known and v is not None}
+        return cls(**kwargs)
 
 
 @dataclass
